@@ -46,7 +46,7 @@ No git? Download the ZIP from GitHub, extract it, and double-click **`berayan.cm
 3. Press **1 → Connect**, then:
    - **Step 1:** choose the VPN, **NordVPN** or **Windscribe**.
    - **Step 2:** choose the protocol (**IKEv2**, **Stealth**, **TCP**, ...).
-   - **Step 3:** choose the location (Enter = best).
+   - **Step 3:** pick the location from a scrollable list (arrow keys, PgUp/PgDn, type to search, Enter = select). Recent locations are listed first.
 4. Berayan runs pre-flight checks, connects, proves the chain with real traffic, and keeps it healthy while the window stays open.
 
 ## The terminal app
@@ -142,7 +142,7 @@ Settings live in `config.json` (copy `config.example.json`). The app writes your
 ## Tests
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1    # 64 offline unit tests
+powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1    # 65 offline unit tests
 powershell -ExecutionPolicy Bypass -File tests\tui-smoke.ps1    # drives the real terminal app (read-only)
 ```
 

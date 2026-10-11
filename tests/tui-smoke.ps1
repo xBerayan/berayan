@@ -67,7 +67,7 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
 }
 function Snap { $a = $null; $l = [TuiProbe.ConsoleProbe]::Snapshot([uint32]$script:proc.Id, [ref]$a); $script:attrs = $a; return $l }
 function Key([string]$k) {
-    $map = @{ 'ENTER' = @([char]13, 0x0D); 'ESC' = @([char]27, 0x1B) }
+    $map = @{ 'ENTER' = @([char]13, 0x0D); 'ESC' = @([char]27, 0x1B); 'DOWN' = @([char]0, 0x28); 'UP' = @([char]0, 0x26); 'PGDN' = @([char]0, 0x22); 'BACK' = @([char]8, 0x08) }
     if ($map.ContainsKey($k)) { [TuiProbe.ConsoleProbe]::SendKey([uint32]$script:proc.Id, $map[$k][0], [int16]$map[$k][1]) }
     else { $c = [char]$k; [TuiProbe.ConsoleProbe]::SendKey([uint32]$script:proc.Id, $c, [int16][int][char]([string]$c).ToUpperInvariant()) }
 }
@@ -105,15 +105,39 @@ try {
     Key '2'; Start-Sleep -Seconds 2; $s = Snap
     Write-Output '--- wizard step 2 ---'; $s | Select-Object -Skip 8 -First 20 | ForEach-Object { "  |$_" }
     Check 'wizard step 2 offers Windscribe protocols (IKEv2, Stealth, TCP ...)' (((Find $s 'Step 2/3') -ge 0) -and ((Find $s '\] IKEv2') -ge 0) -and ((Find $s 'Stealth') -ge 0) -and ((Find $s 'OpenVPN TCP') -ge 0))
-    Key 'ENTER'; Start-Sleep -Seconds 2; $s = Snap
-    Check 'wizard step 3 asks for location' ((Find $s 'Step 3/3') -ge 0)
     Key 'ENTER'
+    $deadline = (Get-Date).AddSeconds(30)
+    do { Start-Sleep -Seconds 1; $s = Snap } until ((Find $s 'Step 3/3') -ge 0 -or (Get-Date) -gt $deadline)
+    Write-Output '--- location picker ---'; $s | Select-Object -Skip 8 -First 16 | ForEach-Object { "  |$_" }
+    Check 'location picker: scrollable list with search + key help' (((Find $s 'Step 3/3') -ge 0) -and ((Find $s 'Search:') -ge 0) -and ((Find $s 'Best location') -ge 0) -and ((Find $s 'PgUp/PgDn') -ge 0))
+    Key 'PGDN'; Start-Sleep -Milliseconds 800; $s = Snap
+    Check 'location picker scrolls (PgDn)' ((Find $s 'rows \d+-\d+ of') -ge 0 -and (Find $s 'rows 1-') -lt 0)
+    foreach ($c in 'g', 'e', 'r', 'm') { Key $c }
+    Start-Sleep -Seconds 1; $s = Snap
+    Check 'type-to-search filters to Germany' (((Find $s 'Search: germ') -ge 0) -and ((Find $s '>\s+Germany') -ge 0))
+    Key 'ENTER'      # select Germany -> pre-flight
     $deadline = (Get-Date).AddSeconds(40)
     do { Start-Sleep -Seconds 2; $s = Snap } until ((Find $s 'Pre-flight') -ge 0 -and (Find $s 'Press any key|Connect now') -ge 0 -or (Get-Date) -gt $deadline)
     Write-Output '--- pre-flight ---'; $s | Select-Object -Skip 8 -First 16 | ForEach-Object { "  |$_" }
     $asked = (Find $s 'Connect now') -ge 0
     if ($asked) { Key 'N' }   # safety net: never confirm a connect from the smoke test
     Check 'pre-flight blocks in read-only mode (never offers to connect)' (((Find $s 'FAIL.*(Read-only|Administrator)') -ge 0) -and -not $asked)
+    Check 'chosen location (Germany = DE) carried into pre-flight' ((Find $s 'CONNECT .*\|\s+DE') -ge 0)
+    Key 'ENTER'; Start-Sleep -Seconds 2
+
+    # Regression: typing a custom location + Enter used to freeze ([Console]::ReadLine with Ctrl+C-as-input).
+    Key '1'; Start-Sleep -Seconds 2; Key '2'; Start-Sleep -Seconds 2; Key 'ENTER'
+    $deadline = (Get-Date).AddSeconds(30)
+    do { Start-Sleep -Seconds 1; $s = Snap } until ((Find $s 'Step 3/3') -ge 0 -or (Get-Date) -gt $deadline)
+    foreach ($c in 't', 'y', 'p', 'e') { Key $c }; Start-Sleep -Milliseconds 800
+    Key 'ENTER'; Start-Sleep -Seconds 1
+    Key 'F'; Key 'r'; Key 'a'; Key 'n'; Key 'k'; Key 'x'; Key 'BACK'; Start-Sleep -Milliseconds 500; Key 'ENTER'
+    $deadline = (Get-Date).AddSeconds(40)
+    do { Start-Sleep -Seconds 2; $s = Snap } until (((Find $s 'Pre-flight') -ge 0 -and (Find $s 'Press any key|Connect now') -ge 0) -or (Get-Date) -gt $deadline)
+    $okCustom = ((Find $s 'Pre-flight') -ge 0) -and ((Find $s 'CONNECT .*\|\s+Frank\b') -ge 0) -and ((Find $s 'Frankx') -lt 0)
+    if (-not $okCustom) { Write-Output '--- custom-location screen ---'; $s | Select-Object -Skip 8 -First 14 | ForEach-Object { "  |$_" } }
+    Check 'typed custom location + Enter does not freeze (Backspace works)' $okCustom
+    if ((Find $s 'Connect now') -ge 0) { Key 'N' }
     Key 'ENTER'; Start-Sleep -Seconds 2
     Key 'Q'
     $null = $script:proc.WaitForExit(10000)

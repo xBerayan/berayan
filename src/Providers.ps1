@@ -93,6 +93,88 @@ function Get-VpnProtocolChoices {
     }
 }
 
+$script:NordLocationCache = $null
+
+# Windscribe's CLI 'locations' command prints nothing (checked in a real console too), so the list
+# is curated. 'connect' accepts an ISO country code (random datacenter in that country), a region
+# or a city name - an unavailable one is reported back by the CLI and shown to the user.
+$script:WindscribeLocations = @(
+    @('US East','US East'), @('US Central','US Central'), @('US West','US West'), @('Canada East','Canada East'), @('Canada West','Canada West'),
+    @('AL','Albania'), @('AR','Argentina'), @('AM','Armenia'), @('AU','Australia'), @('AT','Austria'), @('AZ','Azerbaijan'), @('BE','Belgium'),
+    @('BA','Bosnia and Herzegovina'), @('BR','Brazil'), @('BG','Bulgaria'), @('KH','Cambodia'), @('CL','Chile'), @('CO','Colombia'), @('HR','Croatia'),
+    @('CY','Cyprus'), @('CZ','Czech Republic'), @('DK','Denmark'), @('EC','Ecuador'), @('EE','Estonia'), @('FI','Finland'), @('FR','France'),
+    @('GE','Georgia'), @('DE','Germany'), @('GH','Ghana'), @('GR','Greece'), @('HK','Hong Kong'), @('HU','Hungary'), @('IS','Iceland'),
+    @('IN','India'), @('ID','Indonesia'), @('IE','Ireland'), @('IL','Israel'), @('IT','Italy'), @('JP','Japan'), @('KZ','Kazakhstan'),
+    @('KE','Kenya'), @('LV','Latvia'), @('LT','Lithuania'), @('LU','Luxembourg'), @('MY','Malaysia'), @('MX','Mexico'), @('MD','Moldova'),
+    @('NL','Netherlands'), @('NZ','New Zealand'), @('NG','Nigeria'), @('MK','North Macedonia'), @('NO','Norway'), @('PK','Pakistan'),
+    @('PA','Panama'), @('PE','Peru'), @('PH','Philippines'), @('PL','Poland'), @('PT','Portugal'), @('RO','Romania'), @('RS','Serbia'),
+    @('SG','Singapore'), @('SK','Slovakia'), @('SI','Slovenia'), @('ZA','South Africa'), @('KR','South Korea'), @('ES','Spain'), @('SE','Sweden'),
+    @('CH','Switzerland'), @('TW','Taiwan'), @('TH','Thailand'), @('TN','Tunisia'), @('TR','Turkey'), @('UA','Ukraine'),
+    @('AE','United Arab Emirates'), @('GB','United Kingdom'), @('VN','Vietnam')
+)
+
+function Get-VpnLocationChoices {
+    # Items for the scrollable location picker: Label, Detail, Value (passed to the VPN CLI), Group.
+    # Value '' = the app's best/recommended server; '__custom__' = let the user type one.
+    param([string]$Key)
+    $items = New-Object System.Collections.Generic.List[object]
+    $add = { param($l, $d, $v, $g) $items.Add([pscustomobject]@{ Label = $l; Detail = $d; Value = $v; Group = $g }) }
+    switch ($Key) {
+        'windscribe' {
+            & $add 'Best location' 'fastest server for you (Windscribe picks)' '' 'special'
+            # Recently used datacenters, from Windscribe's own log (read-only).
+            $f = Join-Path $env:LOCALAPPDATA 'Windscribe\Windscribe2\client.log'
+            if (Test-Path $f) {
+                $recent = @(Select-String -Path $f -Pattern 'Connecting to \\"([^"\\]+)\\"' -ErrorAction SilentlyContinue | Select-Object -Last 200 |
+                    ForEach-Object { ($_.Matches[0].Groups[1].Value -split ' - ')[0].Trim() } | Where-Object { $_ })
+                [array]::Reverse($recent)
+                foreach ($c in @($recent | Select-Object -Unique | Select-Object -First 5)) { & $add $c 'recently used city' $c 'special' }
+            }
+            & $add 'Type a location ...' 'city, region or nickname' '__custom__' 'special'
+            foreach ($l in $script:WindscribeLocations) { & $add $l[1] $(if ($l[0].Length -eq 2) { $l[0] } else { 'region' }) $l[0] 'country' }
+        }
+        'nordvpn' {
+            & $add 'Recommended server' 'NordVPN picks the best server for you' '' 'special'
+            & $add 'Type a location ...' 'country or group name' '__custom__' 'special'
+            if (-not $script:NordLocationCache) {
+                $countries = @()
+                $groups = @()
+                $f = Join-Path $env:LOCALAPPDATA 'NordVPN\servers_v2.json'
+                if (-not (Test-Path $f)) {
+                    $f = Get-ChildItem (Join-Path $env:ProgramFiles 'NordVPN') -Recurse -Filter 'servers_v2.json' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+                }
+                if ($f -and (Test-Path $f)) {
+                    try {
+                        $j = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
+                        $locCountry = @{}
+                        foreach ($l in @($j.Locations)) { $locCountry[[int]$l.Id] = $l.Country }
+                        $count = @{}; $cities = @{}
+                        foreach ($s in @($j.Servers)) {
+                            foreach ($lid in @($s.location_ids)) {
+                                $c = $locCountry[[int]$lid]
+                                if ($c) {
+                                    $count[$c.Name] = 1 + [int]$count[$c.Name]
+                                    if (-not $cities.ContainsKey($c.Name)) { $cities[$c.Name] = @{} }
+                                    if ($c.city -and $c.city.name) { $cities[$c.Name][$c.city.name] = $true }
+                                }
+                            }
+                        }
+                        $countries = @($count.Keys | Sort-Object | ForEach-Object {
+                            $cs = @($cities[$_].Keys | Sort-Object)
+                            [pscustomobject]@{ Label = $_; Detail = ("{0} servers  |  {1}" -f $count[$_], (($cs | Select-Object -First 4) -join ', ') + $(if ($cs.Count -gt 4) { ', ...' } else { '' })); Value = $_; Group = 'country' }
+                        })
+                        $groups = @($j.Groups | Where-Object { $_.Title -in @('P2P', 'Obfuscated Servers', 'Double VPN', 'Europe', 'The Americas', 'Asia Pacific', 'Africa, the Middle East and India') } |
+                            ForEach-Object { [pscustomobject]@{ Label = $_.Title; Detail = 'server group'; Value = $_.Title; Group = 'special' } })
+                    } catch { Write-Log VPN "could not read NordVPN server list: $($_.Exception.Message)" -Level DEBUG }
+                }
+                $script:NordLocationCache = @($groups) + @($countries)
+            }
+            foreach ($i in $script:NordLocationCache) { $items.Add($i) }
+        }
+    }
+    return $items.ToArray()
+}
+
 function Get-VpnLocationHint {
     param([string]$Key)
     switch ($Key) {
@@ -139,11 +221,17 @@ function Invoke-VpnConnect {
             Invoke-VpnCli $Install $a
         }
         'windscribe' {
-            # -n: return immediately; we watch the adapters ourselves.
+            # -n: return immediately; we watch the adapters ourselves. Run synchronously so a
+            # rejected location/protocol is reported right away instead of after the timeout.
             $a = @('connect', '-n')
             $a += $(if ($Location) { $Location } else { 'best' })
             if ($Protocol) { $a += (Resolve-WindscribeProtocolPort $Install $Protocol) }
-            Invoke-VpnCli $Install $a
+            Write-Log VPN "running documented CLI: windscribe-cli.exe $($a -join ' ')"
+            $out = (& $Install.CliPath @a 2>&1 | Out-String).Trim()
+            if ($out) { Write-Log VPN "Windscribe: $($out -replace '\s+', ' ')" }
+            if ($out -match '(?i)not found|invalid|unknown|no such|not available|unavailable|error|failed|not logged|upgrade|pro only|premium') {
+                throw "Windscribe rejected the connect request: $($out -replace '\s+', ' ')"
+            }
         }
     }
 }

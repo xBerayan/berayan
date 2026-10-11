@@ -27,8 +27,8 @@ There are two layers:
 
 | Suite | What it covers |
 |---|---|
-| `tests\run-tests.ps1` | 64 offline tests: IP math, config, provider catalogs, banner/dashboard shape, classifier matrix, transactional engine against a simulated route/firewall/NRPT/metric store (apply, idempotency, re-pin, failure mid-apply, crash recovery, foreign state preserved) |
-| `tests\tui-smoke.ps1` | starts the real terminal app **read-only** in a console window, reads the screen buffer and sends keys: locked red banner, dashboard, menu, diagnose scrolling under the banner, settings, connect wizard (VPN → protocol → location → pre-flight), clean quit. It never changes the network. |
+| `tests\run-tests.ps1` | 65 offline tests (real network-changing cmdlets are blocked inside the suite): IP math, config, provider and location catalogs, banner/dashboard shape, classifier matrix, transactional engine against a simulated route/firewall/NRPT/metric store (apply, idempotency, re-pin, failure mid-apply, crash recovery, foreign state preserved) |
+| `tests\tui-smoke.ps1` | starts the real terminal app **read-only** in a console window, reads the screen buffer and sends keys: locked red banner, dashboard, menu, diagnose scrolling under the banner, settings, connect wizard (VPN → protocol → scrollable location picker with search → pre-flight), typed custom location (regression: used to freeze), clean quit. It never changes the network. |
 
 ## Verified live (Windows 10 22H2, v2rayN + xray VLESS-Reality, Windscribe 2.24)
 

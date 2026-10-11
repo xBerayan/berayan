@@ -149,15 +149,91 @@ function Read-Key {
 }
 
 function Read-Text {
-    param([string]$Prompt, [string]$Default = '')
+    # Key-based line editor. NOT [Console]::ReadLine(): with TreatControlCAsInput on, Enter arrives
+    # as a bare CR and .NET's ReadLine blocks forever waiting for the LF (the app looked frozen).
+    # Returns $Default on empty Enter, $null on Esc.
+    param([string]$Prompt, [string]$Default = '', [int]$MaxLength = 120)
     Set-CursorVisible $true
     $suffix = if ($Default) { " [$Default]" } else { '' }
     Write-Tui "  $Prompt$suffix`: " 'BoldWhite' -NoNewline
-    $v = [Console]::ReadLine()
-    if ($null -eq $v) { $v = '' }
-    $v = $v.Trim()
-    if (-not $v) { return $Default }
-    return $v
+    Clear-KeyBuffer
+    $sb = New-Object System.Text.StringBuilder
+    while ($true) {
+        $k = [Console]::ReadKey($true)
+        switch ($k.Key) {
+            'Enter'     { Write-Tui ''; $v = $sb.ToString().Trim(); if ($v) { return $v } else { return $Default } }
+            'Escape'    { Write-Tui ''; return $null }
+            'Backspace' { if ($sb.Length -gt 0) { [void]$sb.Remove($sb.Length - 1, 1); Write-Tui "`b `b" -NoNewline } }
+            default {
+                $c = $k.KeyChar
+                if ([int]$c -ge 32 -and $sb.Length -lt $MaxLength) { [void]$sb.Append($c); Write-Tui ([string]$c) 'White' -NoNewline }
+            }
+        }
+    }
+}
+
+function Select-FromScrollList {
+    # Scrollable, searchable picker. Items: objects with Label, Detail (optional), Group (optional).
+    # Keys: Up/Down, PgUp/PgDn, Home/End, type to filter, Backspace, Enter = select, Esc = back.
+    # Returns the selected item, or $null on Esc.
+    param([string]$Title, [string]$Subtitle = '', [object[]]$Items, [int]$Default = 0)
+    $filter = ''
+    $sel = [Math]::Max(0, [Math]::Min($Default, $Items.Count - 1))
+    $top = 0
+    Set-CursorVisible $false
+    Clear-KeyBuffer
+    while ($true) {
+        # @(...) around the whole if: a single match would otherwise unroll to a bare PSCustomObject,
+        # which has no .Count in Windows PowerShell 5.1 (looked like "no match").
+        $view = @(if ($filter) { $Items | Where-Object { "$($_.Label) $($_.Detail) $($_.Group)" -like "*$filter*" } } else { $Items })
+        $page = [Math]::Max(5, [Console]::WindowHeight - $script:HeaderRows - 11)
+        if ($sel -ge $view.Count) { $sel = [Math]::Max(0, $view.Count - 1) }
+        if ($sel -lt $top) { $top = $sel }
+        if ($sel -ge $top + $page) { $top = $sel - $page + 1 }
+        $w = [Console]::WindowWidth
+
+        Clear-Content
+        Write-Tui ''
+        Write-Tui "  $Title" 'BoldRed'
+        if ($Subtitle) { Write-Tui "  $Subtitle" 'BoldCyan' }
+        Write-Segments @(@('  Search: ', 'DarkGray'), @($(if ($filter) { $filter } else { '(type to filter)' }), $(if ($filter) { 'BoldWhite' } else { 'DarkGray' })), @("     $($view.Count) of $($Items.Count)", 'DarkGray'))
+        Write-Tui ''
+        if (-not $view.Count) { Write-Tui '     no match - Backspace to edit the search' 'Yellow' }
+        $end = [Math]::Min($view.Count, $top + $page)
+        for ($i = $top; $i -lt $end; $i++) {
+            $it = $view[$i]
+            $label = [string]$it.Label
+            $detail = if ($it.Detail) { "   $($it.Detail)" } else { '' }
+            $line = "$label$detail"
+            if ($line.Length -gt $w - 10) { $line = $line.Substring(0, $w - 10) }
+            if ($i -eq $sel) {
+                if ($script:Vt) { [Console]::Write("  $script:E[1;31m>$script:E[0m $script:E[7m $line $script:E[0m`r`n") }
+                else { Write-Tui "  >  $line" 'BoldRed' }
+            } else {
+                Write-Segments @(@('     ', 'DarkGray'), @($label, $(if ($it.Group -eq 'special') { 'Cyan' } else { 'White' })), @($detail, 'DarkGray'))
+            }
+        }
+        for ($i = $end - $top; $i -lt $page; $i++) { Write-Tui '' }
+        $more = if ($view.Count -gt $page) { "  rows $($top + 1)-$end of $($view.Count)" } else { '' }
+        Write-Segments @(@('  Up/Down PgUp/PgDn Home/End  move   ', 'DarkGray'), @('Enter', 'BoldRed'), @(' select   ', 'DarkGray'), @('Esc', 'BoldRed'), @(' back   type to search', 'DarkGray'), @($more, 'DarkGray'))
+
+        $k = [Console]::ReadKey($true)
+        switch ($k.Key) {
+            'UpArrow'   { if ($sel -gt 0) { $sel-- } }
+            'DownArrow' { if ($sel -lt $view.Count - 1) { $sel++ } }
+            'PageUp'    { $sel = [Math]::Max(0, $sel - $page) }
+            'PageDown'  { $sel = [Math]::Min([Math]::Max(0, $view.Count - 1), $sel + $page) }
+            'Home'      { $sel = 0 }
+            'End'       { $sel = [Math]::Max(0, $view.Count - 1) }
+            'Enter'     { if ($view.Count) { return $view[$sel] } }
+            'Escape'    { if ($filter) { $filter = ''; $sel = 0; $top = 0 } else { return $null } }
+            'Backspace' { if ($filter.Length) { $filter = $filter.Substring(0, $filter.Length - 1); $sel = 0; $top = 0 } }
+            default {
+                $c = $k.KeyChar
+                if ([int]$c -ge 32 -and $filter.Length -lt 40) { $filter += $c; $sel = 0; $top = 0 }
+            }
+        }
+    }
 }
 
 function Read-YesNo {
@@ -406,17 +482,29 @@ function Invoke-ConnectWizard {
         while ($true) { $k = Read-Key; if ($k -eq 'ENTER') { break }; if ($k -eq 'ESC') { return } }
     }
 
-    # Step 3 - location
+    # Step 3 - location (scrollable, searchable list)
     Clear-Content
     Write-Tui ''
-    Write-Tui "  CONNECT  -  $($script:ChainVpn.Display)  |  $($proto.Label)" 'BoldRed'
-    Write-Tui ''
-    Write-Tui '  Step 3/3  -  Location' 'BoldCyan'
-    Write-Tui "  $(Get-VpnLocationHint $prov)" 'DarkGray'
-    Write-Tui ''
+    Write-Tui '  Loading locations ...' 'DarkGray'
+    $locItems = @(Get-VpnLocationChoices $prov)
     $lastLoc = if ($cfgProv -eq $prov -and $Config.vpn.Contains('location') -and $Config.vpn.location -and $Config.vpn.location -ne 'best') { [string]$Config.vpn.location } else { '' }
-    $loc = Read-Text 'Location' $lastLoc
-    if ($loc -eq 'best') { $loc = '' }
+    $lIdx = 0
+    if ($lastLoc) { for ($j = 0; $j -lt $locItems.Count; $j++) { if ($locItems[$j].Value -eq $lastLoc) { $lIdx = $j; break } } }
+    $pick = Select-FromScrollList "CONNECT  -  $($script:ChainVpn.Display)  |  $($proto.Label)" 'Step 3/3  -  Choose a location' $locItems $lIdx
+    if (-not $pick) { return }
+    $loc = [string]$pick.Value
+    if ($loc -eq '__custom__') {
+        Clear-Content
+        Write-Tui ''
+        Write-Tui "  CONNECT  -  $($script:ChainVpn.Display)  |  $($proto.Label)" 'BoldRed'
+        Write-Tui ''
+        Write-Tui "  $(Get-VpnLocationHint $prov)" 'DarkGray'
+        Write-Tui ''
+        $loc = Read-Text 'Location' $lastLoc
+        if ($null -eq $loc) { return }
+        if ($loc -eq 'best') { $loc = '' }
+    }
+    Set-CursorVisible $true
 
     Set-UserConfigValue 'vpn.provider' $prov
     Set-UserConfigValue 'vpn.protocol' $proto.Id
@@ -433,7 +521,8 @@ function Invoke-ConnectWizard {
     if ($script:TuiReadOnly) { $blocking = $true; Write-Check 'fail' 'Read-only mode: Berayan will not change anything. Start it normally (no -ReadOnly) to connect.' }
     elseif (Test-IsAdmin) { Write-Check 'ok' 'Running as Administrator' }
     else { $blocking = $true; Write-Check 'fail' 'Not running as Administrator - close Berayan and start it again, then accept the UAC prompt.' }
-    $env = Get-ChainEnvironment $Config $null
+    $script:LogQuiet = $true      # detection warnings go to the log; the checks below explain them
+    try { $env = Get-ChainEnvironment $Config $null } finally { $script:LogQuiet = $false }
     $u = $env.Upstream
     if ($u.Mode -eq 'tun') { Write-Check 'ok' "v2ray TUN up: $($u.Adapter.Alias)  ($((@($u.Processes) | ForEach-Object { ($_ -split '\(')[0] } | Where-Object { $_ -ne 'sing-box-daemon' } | Select-Object -Unique) -join ', '))" }
     else { $blocking = $true; Write-Check 'fail' 'No v2ray TUN tunnel found - start v2rayN / sing-box with TUN mode ON and check a website loads.' }
@@ -503,7 +592,7 @@ function Invoke-SettingsScreen {
             '2' { Set-UserConfigValue 'dnsLeakProtection' (-not $Config.dnsLeakProtection) }
             '3' { $order = @('block-if-unsafe', 'block-all', 'allow'); $n = $order[([array]::IndexOf($order, [string]$Config.ipv6Policy) + 1) % 3]; Set-UserConfigValue 'ipv6Policy' $n }
             '4' { Set-UserConfigValue 'allowLan' (-not $Config.allowLan) }
-            '5' { Write-Tui ''; $v = Read-Text 'Comma-separated IPs/CIDRs (empty = auto-detect)' ''; Set-UserConfigValue 'upstream.serverAddresses' @($v -split '[,\s]+' | Where-Object { $_ }) }
+            '5' { Write-Tui ''; $v = Read-Text 'Comma-separated IPs/CIDRs (empty = auto-detect, Esc = keep)' ''; if ($null -ne $v) { Set-UserConfigValue 'upstream.serverAddresses' @($v -split '[,\s]+' | Where-Object { $_ }) } }
             '6' { Write-Tui ''; $v = Read-Text 'Seconds' ([string]$Config.nordvpn.connectTimeoutSec); if ($v -match '^\d+$') { Set-UserConfigValue 'nordvpn.connectTimeoutSec' ([int]$v) } }
             { $_ -in @('B', 'ESC', 'Q') } { return }
         }

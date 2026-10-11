@@ -23,6 +23,13 @@ $script:MutexName = 'Local\vpn-chain-test-' + [guid]::NewGuid().ToString('N')
 Initialize-Log
 function Write-Host { }   # keep output readable; results are printed via [Console]
 
+# Safety net: unit tests must NEVER change the real network, even when run elevated.
+# These shadow the real cmdlets for this script; a test that forgets a fake fails loudly instead.
+foreach ($cmd in 'New-NetRoute', 'Remove-NetRoute', 'New-NetFirewallRule', 'Set-NetFirewallRule', 'Set-NetIPInterface',
+                 'Add-DnsClientNrptRule', 'Remove-DnsClientNrptRule', 'Set-NetAdapterBinding', 'Disable-NetAdapterBinding') {
+    Set-Item -Path "function:script:$cmd" -Value ([scriptblock]::Create("throw 'unit test attempted a REAL network change: $cmd'"))
+}
+
 $script:pass = 0; $script:fail = 0
 function It([string]$Name, [scriptblock]$Body) {
     try { & $Body; $script:pass++; [Console]::WriteLine("  PASS  $Name") }
@@ -123,6 +130,16 @@ It 'protocol catalogs: Windscribe IKEv2 first and WireGuard flagged; NordVPN app
     $n = @(Get-VpnProtocolChoices nordvpn)
     Assert-Equal 'app' $n[0].Id
     foreach ($c in $n) { Assert-True ($script:Providers['nordvpn'].Protocols -contains $c.Id) "CLI must accept $($c.Id)" }
+}
+It 'location catalogs: best/recommended + custom entries, Windscribe countries carry CLI values' {
+    $w = @(Get-VpnLocationChoices windscribe)
+    Assert-Equal '' $w[0].Value
+    Assert-True (@($w | Where-Object Value -eq '__custom__').Count -eq 1) 'custom entry missing'
+    Assert-Equal 'DE' ($w | Where-Object Label -eq 'Germany').Value
+    Assert-True (@($w | Where-Object Group -eq 'country').Count -ge 60) 'too few Windscribe locations'
+    $n = @(Get-VpnLocationChoices nordvpn)
+    Assert-Equal '' $n[0].Value
+    Assert-True (@($n | Where-Object Value -eq '__custom__').Count -eq 1) 'custom entry missing'
 }
 It 'user choices persist to config.json and merge with defaults' {
     $saved = $script:RootDir; $script:RootDir = $tmp
@@ -265,14 +282,6 @@ function Add-HostRoute([string]$Prefix, [int]$IfIndex, [string]$NextHop, [int]$M
 }
 function Remove-HostRoute([string]$Prefix, [int]$IfIndex, [string]$NextHop) { $script:FakeRoutes.Remove("$Prefix|$IfIndex|$NextHop") }
 function Test-RoutePrefixOnInterface([string]$Prefix, [int]$IfIndex) { [bool]@($script:FakeRoutes.Keys | Where-Object { $_ -like "$Prefix|$IfIndex|*" }).Count }
-It 'VPN that already installs 0/1 + 128/1 (any nexthop) is left alone' {
-    $script:FakeRoutes = @{ '0.0.0.0/1|91|10.9.0.1' = 'vpn'; '128.0.0.0/1|91|10.9.0.1' = 'vpn' }; $script:FakeRules = @{}
-    $s = New-Session; Save-Session $s
-    [void](Invoke-Reconcile $s (Get-DesiredState (New-FakeEnv) -NordPhase))
-    Assert-Equal 0 @($s.journal | Where-Object purpose -eq 'nord-default').Count
-    [void](Undo-All $s)
-    Assert-True ($script:FakeRoutes.ContainsKey('0.0.0.0/1|91|10.9.0.1')) 'VPN route must survive'
-}
 function Add-ChainFirewallRule($Spec) { $script:FakeRules[$Spec.name] = $script:FirewallGroup }
 function Remove-ChainFirewallRule([string]$Name) { $script:FakeRules.Remove($Name) }
 function Get-NetFirewallRule([string]$Name, [string]$Group, $ErrorAction) {
@@ -284,6 +293,14 @@ $script:FakeMetric = @{}
 function Get-ChainIfMetric([int]$IfIndex) { if ($script:FakeMetric.ContainsKey($IfIndex)) { [pscustomobject]@{ Metric = $script:FakeMetric[$IfIndex]; Automatic = $true } } }
 function Set-ChainIfMetric([int]$IfIndex, [int]$Metric) { $script:FakeMetric[$IfIndex] = $Metric }
 function Restore-ChainIfMetric([int]$IfIndex, [int]$Metric, [bool]$Automatic) { $script:FakeMetric[$IfIndex] = $Metric }
+It 'VPN that already installs 0/1 + 128/1 (any nexthop) is left alone' {
+    $script:FakeRoutes = @{ '0.0.0.0/1|91|10.9.0.1' = 'vpn'; '128.0.0.0/1|91|10.9.0.1' = 'vpn' }; $script:FakeRules = @{}
+    $s = New-Session; Save-Session $s
+    [void](Invoke-Reconcile $s (Get-DesiredState (New-FakeEnv) -NordPhase))
+    Assert-Equal 0 @($s.journal | Where-Object purpose -eq 'nord-default').Count
+    [void](Undo-All $s)
+    Assert-True ($script:FakeRoutes.ContainsKey('0.0.0.0/1|91|10.9.0.1')) 'VPN route must survive'
+}
 It 'VPN adapter metric raised above WAN, re-asserted after the app resets it, restored on undo' {
     $script:FakeRoutes = @{}; $script:FakeRules = @{}; $script:FakeMetric = @{ 91 = 5 }
     $nlx | Add-Member Metric4 5 -Force
