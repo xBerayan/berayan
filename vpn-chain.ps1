@@ -23,7 +23,7 @@
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'status', 'diagnose', 'test', 'reset', 'monitor', 'help')]
+    [ValidateSet('start', 'stop', 'status', 'diagnose', 'test', 'reset', 'monitor', 'guard-on', 'guard-off', 'help')]
     [string]$Command = 'help',
 
     [ValidateSet('', 'nordvpn', 'windscribe')]
@@ -83,13 +83,15 @@ try {
     if (-not $Location -and $cfg.vpn.Contains('location')) { $Location = [string]$cfg.vpn.location }
     if (-not $Protocol -and $cfg.vpn.Contains('protocol')) { $Protocol = [string]$cfg.vpn.protocol }
     if ($Protocol -and $script:ChainVpn.Protocols -notcontains $Protocol.ToLowerInvariant()) { throw "Protocol '$Protocol' is not supported for $script:VpnName (supported: $($script:ChainVpn.Protocols -join ', '))." }
-    $opt = @{ NoMonitor = [bool]$NoMonitor; Connect = [bool]$Connect; Location = $Location; Protocol = $Protocol; NordServer = $NordServer; KeepOnFailure = [bool]$KeepOnFailure; DisconnectNord = [bool]$DisconnectNord }
+    $opt = @{ KeepGuard = $false; NoMonitor = [bool]$NoMonitor; Connect = [bool]$Connect; Location = $Location; Protocol = $Protocol; NordServer = $NordServer; KeepOnFailure = [bool]$KeepOnFailure; DisconnectNord = [bool]$DisconnectNord }
 
     switch ($Command) {
         'start'    { if (-not (Assert-Admin -Command $Command -OriginalArgs $originalArgs -NoElevate:$NoElevate)) { $exitCode = 2; break }; $exitCode = @(Invoke-Start $cfg $opt )[-1] }
         'stop'     { if (-not (Assert-Admin -Command $Command -OriginalArgs $originalArgs -NoElevate:$NoElevate)) { $exitCode = 2; break }; $exitCode = @(Invoke-Stop $cfg $opt )[-1] }
         'reset'    { if (-not (Assert-Admin -Command $Command -OriginalArgs $originalArgs -NoElevate:$NoElevate)) { $exitCode = 2; break }; $exitCode = @(Invoke-Stop $cfg $opt -Reset )[-1] }
         'monitor'  { if (-not (Assert-Admin -Command $Command -OriginalArgs $originalArgs -NoElevate:$NoElevate)) { $exitCode = 2; break }; $exitCode = @(Invoke-Monitor $cfg )[-1] }
+        'guard-on' { if (-not (Assert-Admin -Command $Command -OriginalArgs $originalArgs -NoElevate:$NoElevate)) { $exitCode = 2; break }; $exitCode = @(Invoke-GuardOn $cfg)[-1] }
+        'guard-off'{ if (-not (Assert-Admin -Command $Command -OriginalArgs $originalArgs -NoElevate:$NoElevate)) { $exitCode = 2; break }; $exitCode = @(Invoke-Stop $cfg $opt)[-1] }
         'status'   { $st = Write-StatusSummary -Config $cfg; $exitCode = if ($st -eq 'CHAIN_OK') { 0 } else { 4 } }
         'diagnose' { $exitCode = @(Invoke-Diagnose $cfg )[-1] }
         'test'     { $exitCode = @(Invoke-Test $cfg )[-1] }

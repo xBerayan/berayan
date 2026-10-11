@@ -68,6 +68,14 @@ function Get-V2rayNConfigDirs {
         if (-not $exe) { $exe = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).ExecutablePath }
         if ($exe) { $dirs += Join-Path (Split-Path $exe) 'binConfigs' }
     }
+    # Remember where v2rayN lives, so its profile is still readable while it restarts.
+    $memo = Join-Path $script:StateDir 'v2rayn-configdir.txt'
+    if ($dirs.Count) {
+        try { if (-not (Test-Path $script:StateDir)) { New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null }; Set-Content -Path $memo -Value $dirs[0] -Encoding UTF8 -ErrorAction Stop } catch { }
+    } elseif (Test-Path $memo) {
+        $d = (Get-Content $memo -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($d -and (Test-Path $d)) { $dirs += $d }
+    }
     return @($dirs | Select-Object -Unique)
 }
 
@@ -124,6 +132,39 @@ function Get-V2rayNBootstrapDns {
         }
     }
     return @($ips | Select-Object -Unique)
+}
+
+function Get-V2rayNServerAddresses {
+    # Proxy server address(es) of the profile v2rayN is running right now (read-only), from the
+    # generated xray (config.json) and sing-box (configPre.json) outbounds. This keeps the leak guard
+    # correct when the user switches servers - no need to wait for a socket to show up.
+    param([string[]]$Dirs)
+    if (-not $Dirs) { $Dirs = @(Get-V2rayNConfigDirs) }
+    $out = @()
+    foreach ($d in $Dirs) {
+        foreach ($name in 'config.json', 'configPre.json') {
+            $f = Join-Path $d $name
+            if (-not (Test-Path $f)) { continue }
+            try { $j = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+            foreach ($o in @($j.outbounds)) {
+                if (-not $o) { continue }
+                $names = $o.PSObject.Properties.Name
+                $kind = if ($names -contains 'protocol') { [string]$o.protocol } elseif ($names -contains 'type') { [string]$o.type } else { '' }
+                if ($kind -in @('freedom', 'blackhole', 'dns', 'direct', 'block', 'selector', 'urltest', 'loopback', '')) { continue }
+                $cand = @()
+                if ($names -contains 'server') { $cand += [string]$o.server }                       # sing-box
+                if ($names -contains 'settings' -and $o.settings) {                                    # xray
+                    $s = $o.settings; $sn = $s.PSObject.Properties.Name
+                    if ($sn -contains 'address') { $cand += [string]$s.address }
+                    if ($sn -contains 'vnext')   { $cand += @($s.vnext | ForEach-Object { [string]$_.address }) }
+                    if ($sn -contains 'servers') { $cand += @($s.servers | ForEach-Object { [string]$_.address }) }
+                    if ($sn -contains 'peers')   { $cand += @($s.peers | ForEach-Object { ([string]$_.endpoint) -replace ':\d+$', '' -replace '^\[|\]$', '' }) }
+                }
+                $out += @($cand | Where-Object { $_ -and $_ -notmatch '^(127\.|localhost$|::1$)' })
+            }
+        }
+    }
+    return @($out | Select-Object -Unique)
 }
 
 function Get-UpstreamBlockedUdpPorts {
@@ -217,6 +258,10 @@ function Get-UpstreamInfo {
     $servers = @()
     $sources = @{}
     foreach ($ip in (Resolve-AddressList $Config.upstream.serverAddresses -Resolver $bootstrap)) { $servers += $ip; $sources[$ip] = 'config' }
+    # The server(s) of the profile v2rayN runs right now (follows server switches).
+    $v2nAddrs = @(Get-V2rayNServerAddresses)
+    foreach ($ip in (Resolve-AddressList $v2nAddrs -Resolver $bootstrap)) { if ($servers -notcontains $ip) { $servers += $ip; $sources[$ip] = 'v2rayN-profile' } }
+    $v2nNames = @($v2nAddrs | Where-Object { Test-IsHostName $_ })
 
     $conns = Get-ProcessConnections -ProcessId @($procs | ForEach-Object Id)
     $loopConns = @($conns | Where-Object { $nordLocal -contains $_.LocalAddress -and (Test-IsPublicIp $_.RemoteAddress) })
@@ -255,7 +300,7 @@ function Get-UpstreamInfo {
         # Remote IPs the core reaches from a WAN address = proof that traffic leaves on the WAN,
         # whatever the route table says (e.g. v2rayN: xray -> TUN -> sing-box "direct" by process rule).
         WanRemotes      = @($wanConns | ForEach-Object RemoteAddress | Select-Object -Unique)
-        ServerNames     = @(Get-UpstreamServerNames -Configured $Config.upstream.serverAddresses -ServerIps $servers)
+        ServerNames     = @(@(Get-UpstreamServerNames -Configured $Config.upstream.serverAddresses -ServerIps $servers) + $v2nNames | Select-Object -Unique)
         BootstrapDns    = $bootstrap
         ServersAmbiguous = ($byRemote.Count -gt 2 -and -not @($Config.upstream.serverAddresses).Count)
         LoopConnections = $loopConns

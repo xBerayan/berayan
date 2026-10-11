@@ -12,7 +12,9 @@ $script:LogDir        = Join-Path $script:RootDir 'logs'
 $script:Verbose       = $false
 $script:LogFile       = $null
 $script:MutexName     = 'Global\vpn-chain-mutation-lock'
-$script:LogQuiet      = $false    # true while the interactive app runs background ticks
+$script:LogQuiet      = $false    # true in the interactive app: log lines never reach the terminal
+$script:ConsoleMute   = $false    # true while the interactive app shows its own progress view
+$script:LogHook       = $null     # interactive app: scriptblock(tag, message, level) fed by every log line
 $script:Interactive   = $false    # true inside the interactive terminal app (enables Esc-to-cancel)
 $script:AppVersion    = '2.0.0'
 
@@ -53,6 +55,7 @@ function Write-Host {
     param([Parameter(Position = 0, ValueFromPipeline = $true, ValueFromRemainingArguments = $true)]$Object,
           $ForegroundColor, $BackgroundColor, [switch]$NoNewline)
     process {
+        if ($script:ConsoleMute) { return }     # interactive app is drawing its own progress view
         $p = @{}
         if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $p.ForegroundColor = $ForegroundColor }
         if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $p.BackgroundColor = $BackgroundColor }
@@ -74,8 +77,9 @@ function Write-Log {
     if ($script:LogFile) {
         try { Add-Content -Path $script:LogFile -Value $line -Encoding UTF8 -ErrorAction Stop } catch { }
     }
+    if ($script:LogHook -and $Level -ne 'DEBUG') { try { & $script:LogHook $Tag $Message $Level } catch { } }
     if ($Level -eq 'DEBUG' -and -not $script:Verbose) { return }
-    if ($script:LogQuiet) { return }   # interactive app: background auto-repair writes to the log file only
+    if ($script:LogQuiet) { return }   # interactive app: logs go to the log file only (clean screen)
     $color = switch ($Level) { 'WARN' { 'Yellow' } 'ERROR' { 'Red' } 'DEBUG' { 'DarkGray' } 'OK' { 'Green' } default { 'Gray' } }
     Write-Host ('[{0}] {1}' -f $Tag, $Message) -ForegroundColor $color
 }
@@ -96,6 +100,9 @@ function Get-DefaultConfig {
         }
         vpn = [ordered]@{
             provider = 'ask'              # ask | nordvpn | windscribe  (VPN chained on top of v2ray)
+        }
+        guard = [ordered]@{
+            autoStart = $true             # leak guard turns on when Berayan opens (and when v2ray comes back up)
         }
         nordvpn = [ordered]@{             # settings for the chained VPN (any provider)
             adapter           = 'auto'    # interface alias, or auto

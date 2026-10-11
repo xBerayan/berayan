@@ -56,12 +56,14 @@ No git? Download the ZIP from GitHub, extract it, and double-click **`berayan.cm
   ───────────────────────────────────────────────────────────────────
   UPSTREAM   ■ Connected   singbox_tun  |  v2rayN/xray  |  exit 203.0.113.7
   VPN        ■ Windscribe connected   IKEv2  |  Frankfurt
-  CHAIN      ■ HEALTHY   auto-repair ON  (checked 11:46:55)
+  CHAIN      ■ HEALTHY   apps -> Windscribe -> v2ray -> internet
+  LEAK GUARD ■ ON   only v2ray can reach the internet  |  auto-repair 11:46:55
   PUBLIC IP    198.51.100.50   (checked 11:47:20)
-  GUARDS       kill switch ON  |  DNS locked to VPN  |  IPv6 blocked
+
   ───────────────────────────────────────────────────────────────────
    [1] Connect          choose VPN  ->  protocol  ->  location
-   [2] Disconnect       stop the chain and restore normal networking
+   [2] Disconnect       VPN off (leak guard stays on), or everything off
+   [G] Leak guard: ON   press to turn off
    [3] Full test        public IP, DNS, IPv6, traffic proof
    [4] Diagnose         adapters, routes, upstream, VPN details
    [5] Settings         kill switch, DNS, IPv6, upstream servers
@@ -70,10 +72,26 @@ No git? Download the ZIP from GitHub, extract it, and double-click **`berayan.cm
    [R] Refresh   [Q] Quit
 ```
 
-- **The menu stays on screen.** Operation output scrolls *under* the locked banner.
+- **The menu stays on screen.** Operations show a short step list (`[ OK ]` / `[ .. ]` / `[FAIL]`) and a result card. No log lines appear on screen; the full log is under **7 View log**.
 - **Auto-repair** runs in the background while the menu is open. It re-pins routes after VPN or v2ray reconnects, server switches, Wi-Fi ↔ Ethernet changes and sleep/resume.
-- **Esc** cancels a connect in progress, and everything is rolled back.
+- **Esc** cancels a connect in progress. Everything is rolled back, and the leak guard stays on.
+- **Locations** are picked from a scrollable, searchable list. For Windscribe this includes your **static IPs** (e.g. "Washington DC (static IP)") and recently used cities.
 - **`berayan.cmd -ReadOnly`** runs without admin and changes nothing: status, test, diagnose and log only.
+
+## Leak guard (your real IP never leaks)
+
+The leak guard turns **on when Berayan opens** and **off when you quit** (you can choose to keep it on). Toggle it any time with **G**.
+
+| Situation | What happens |
+|---|---|
+| v2ray up, no VPN | everything goes through v2ray; the physical network may only reach your v2ray server (and LAN) |
+| VPN connected through v2ray | the same, plus DNS only via the VPN and the VPN server pinned into v2ray |
+| v2ray drops or restarts | traffic is **blocked**, not sent over your real connection. It resumes when v2ray is back |
+| VPN drops or reconnects | traffic falls back to v2ray, never to your real IP |
+| you switch servers in v2rayN | Berayan reads v2rayN's active profile and allows the new server automatically |
+| Berayan or Windows crashes | the firewall rules stay (fail-closed). Open Berayan → **6 Reset**, or just turn the guard off with **G** |
+
+It is built from Windows Firewall rules in the group `vpn-chain` plus a few routes, all journaled and removed exactly when you turn it off.
 
 ## Recommended settings (important)
 
@@ -142,7 +160,7 @@ Settings live in `config.json` (copy `config.example.json`). The app writes your
 ## Tests
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1    # 65 offline unit tests
+powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1    # 66 offline unit tests
 powershell -ExecutionPolicy Bypass -File tests\tui-smoke.ps1    # drives the real terminal app (read-only)
 ```
 

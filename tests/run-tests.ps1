@@ -264,6 +264,21 @@ It 'server names without bootstrap DNS produce a deadlock warning, no NRPT' {
     Assert-Equal 0 @($d.Items | Where-Object kind -eq 'nrpt').Count
     Assert-True (@($d.Notes | Where-Object { $_ -like '*deadlock*' }).Count -eq 1)
 }
+It 'leak guard (guard-only): kill switch even if disabled in settings, no VPN items, v2ray server pinned' {
+    $e = New-FakeEnv @('185.1.1.1') -CfgOver @{ killSwitch = $false }
+    $e.Upstream | Add-Member ServerNames @('srv.example.net') -Force
+    $e.Upstream | Add-Member BootstrapDns @('119.29.29.29') -Force
+    $nlx | Add-Member Metric4 5 -Force
+    $d = Get-DesiredState $e -GuardOnly
+    $p = @($d.Items | ForEach-Object { $_.purpose })
+    Assert-True ($p -contains 'killswitch-v4' -and $p -contains 'killswitch-v6') 'guard must always include the kill switch'
+    Assert-True ($p -contains 'upstream-server' -and $p -contains 'upstream-dns') 'v2ray server + its DNS must stay reachable'
+    Assert-True ($p -contains 'dns-wan-udp') 'ISP DNS must be blocked'
+    foreach ($bad in 'nord-default', 'nord-endpoint', 'nord-endpoint-direct', 'vpn-metric', 'upstream-name', 'dns-upstream-udp', 'ipv6-upstream', 'ipv6-wan') {
+        Assert-True ($p -notcontains $bad) "guard-only must not contain $bad"
+    }
+    $nlx.PSObject.Properties.Remove('Metric4')
+}
 It 'rule names change when the upstream adapter is re-created (new ifIndex)' {
     $a = (Get-DesiredState (New-FakeEnv) -NordPhase).Items | Where-Object purpose -eq 'dns-upstream-udp'
     $tun.ifIndex = 51

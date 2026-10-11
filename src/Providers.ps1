@@ -122,14 +122,23 @@ function Get-VpnLocationChoices {
     switch ($Key) {
         'windscribe' {
             & $add 'Best location' 'fastest server for you (Windscribe picks)' '' 'special'
-            # Recently used datacenters, from Windscribe's own log (read-only).
-            $f = Join-Path $env:LOCALAPPDATA 'Windscribe\Windscribe2\client.log'
-            if (Test-Path $f) {
-                $recent = @(Select-String -Path $f -Pattern 'Connecting to \\"([^"\\]+)\\"' -ErrorAction SilentlyContinue | Select-Object -Last 200 |
-                    ForEach-Object { ($_.Matches[0].Groups[1].Value -split ' - ')[0].Trim() } | Where-Object { $_ })
-                [array]::Reverse($recent)
-                foreach ($c in @($recent | Select-Object -Unique | Select-Object -First 5)) { & $add $c 'recently used city' $c 'special' }
+            # From Windscribe's own log (read-only): datacenters you connected to. Static IP locations are
+            # named "City - <IP>", regular ones "City - Nickname".
+            $logs = @('client.log', 'client.1.log' | ForEach-Object { Join-Path $env:LOCALAPPDATA "Windscribe\Windscribe2\$_" } | Where-Object { Test-Path $_ })
+            $seen = @()
+            if ($logs.Count) {
+                $seen = @(Select-String -Path $logs -Pattern 'Connecting to \\"([^"\\]+)\\"' -ErrorAction SilentlyContinue | Sort-Object { $_.Line } |
+                    ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() } | Where-Object { $_ })
+                [array]::Reverse($seen)
             }
+            $statics = @($seen | Where-Object { $_ -match '^(.+?) - (\d{1,3}(\.\d{1,3}){3})$' } | Select-Object -Unique)
+            foreach ($s in $statics) {
+                $null = $s -match '^(.+?) - (\d{1,3}(\.\d{1,3}){3})$'
+                & $add "$($Matches[1])  (static IP)" "$($Matches[2])  your static IP" "static:$($Matches[2])" 'static'
+            }
+            & $add 'Static IP ...' 'type the city or IP of one of your Windscribe static IPs' '__static__' 'static'
+            $recent = @($seen | Where-Object { $_ -notmatch ' - \d{1,3}(\.\d{1,3}){3}$' } | ForEach-Object { ($_ -split ' - ')[0].Trim() } | Select-Object -Unique | Select-Object -First 5)
+            foreach ($c in $recent) { & $add $c 'recently used city' $c 'special' }
             & $add 'Type a location ...' 'city, region or nickname' '__custom__' 'special'
             foreach ($l in $script:WindscribeLocations) { & $add $l[1] $(if ($l[0].Length -eq 2) { $l[0] } else { 'region' }) $l[0] 'country' }
         }
@@ -224,7 +233,8 @@ function Invoke-VpnConnect {
             # -n: return immediately; we watch the adapters ourselves. Run synchronously so a
             # rejected location/protocol is reported right away instead of after the timeout.
             $a = @('connect', '-n')
-            $a += $(if ($Location) { $Location } else { 'best' })
+            if ($Location -like 'static:*') { $a += @('static', $Location.Substring(7)) }   # documented: connect static "City|IP"
+            else { $a += $(if ($Location) { $Location } else { 'best' }) }
             if ($Protocol) { $a += (Resolve-WindscribeProtocolPort $Install $Protocol) }
             Write-Log VPN "running documented CLI: windscribe-cli.exe $($a -join ' ')"
             $out = (& $Install.CliPath @a 2>&1 | Out-String).Trim()

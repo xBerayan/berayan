@@ -84,7 +84,9 @@ try {
     Check 'banner is red (bold/bright)' ($b -ge 0 -and ($script:attrs[$b] -band 4) -eq 4) "attr $($script:attrs[$b])"
     Check 'tagline + READ-ONLY marker' ((Find $s 'v2ray  ->  VPN chain.*READ-ONLY') -ge 0)
     Check 'dashboard: UPSTREAM / VPN / CHAIN / PUBLIC IP' (((Find $s '^\s+UPSTREAM') -ge 0) -and ((Find $s '^\s+VPN ') -ge 0) -and ((Find $s '^\s+CHAIN') -ge 0) -and ((Find $s 'PUBLIC IP') -ge 0))
-    Check 'menu items present' (((Find $s '\[1\] (Connect|Reconnect)') -ge 0) -and ((Find $s '\[3\] Full test') -ge 0) -and ((Find $s '\[Q\] Quit') -ge 0))
+    Check 'menu items present (incl. leak guard toggle)' (((Find $s '\[1\] (Connect|Reconnect)') -ge 0) -and ((Find $s 'Leak guard: (ON|OFF)') -ge 0) -and ((Find $s '\[3\] Full test') -ge 0) -and ((Find $s '\[Q\] Quit') -ge 0))
+    Check 'dashboard shows LEAK GUARD state' ((Find $s '^\s+LEAK GUARD\s') -ge 0)
+    Check 'clean UI: no raw log lines on screen' ((Find $s '^\s*\[(UPSTREAM|ROUTE|FIREWALL|DNS|VERIFY|CONFIG|CLI|STATE|ROLLBACK)\]') -lt 0)
 
     Key '4'                                   # Diagnose: long output must scroll UNDER the locked banner
     $deadline = (Get-Date).AddSeconds(60)
@@ -129,7 +131,7 @@ try {
     Key '1'; Start-Sleep -Seconds 2; Key '2'; Start-Sleep -Seconds 2; Key 'ENTER'
     $deadline = (Get-Date).AddSeconds(30)
     do { Start-Sleep -Seconds 1; $s = Snap } until ((Find $s 'Step 3/3') -ge 0 -or (Get-Date) -gt $deadline)
-    foreach ($c in 't', 'y', 'p', 'e') { Key $c }; Start-Sleep -Milliseconds 800
+    foreach ($c in 't', 'y', 'p', 'e', ' ', 'a') { Key $c }; Start-Sleep -Milliseconds 800
     Key 'ENTER'; Start-Sleep -Seconds 1
     Key 'F'; Key 'r'; Key 'a'; Key 'n'; Key 'k'; Key 'x'; Key 'BACK'; Start-Sleep -Milliseconds 500; Key 'ENTER'
     $deadline = (Get-Date).AddSeconds(40)

@@ -77,7 +77,9 @@ function New-RouteSpec {
 }
 
 function Get-DesiredState {
-    param([Parameter(Mandatory)]$Env, [switch]$NordPhase)
+    # -GuardOnly: the always-on leak guard without a chained VPN - everything must leave through
+    # v2ray; the physical WAN may only reach the v2ray server(s), their DNS and the LAN.
+    param([Parameter(Mandatory)]$Env, [switch]$NordPhase, [switch]$GuardOnly)
     $cfg = $Env.Config
     $upIf = $Env.Upstream.Adapter
     $items = New-Object System.Collections.Generic.List[object]
@@ -107,7 +109,9 @@ function Get-DesiredState {
         $gw = if ($fam -eq 4) { $p.Gateway4 } else { $p.Gateway6 }
         $items.Add((New-RouteSpec 'upstream-dns' $ip $p $gw))
     }
-    if ($boot.Count) {
+    if ($GuardOnly) {
+        # no VPN owns system DNS in guard mode -> no deadlock to prevent, no NRPT needed
+    } elseif ($boot.Count) {
         foreach ($n in @($Env.Upstream.ServerNames)) {
             $items.Add([ordered]@{ kind = 'nrpt'; purpose = 'upstream-name'; namespace = $n; nameServers = @($boot) })
         }
@@ -124,14 +128,15 @@ function Get-DesiredState {
     #     sing-box (auto_detect_interface) follows the best 0.0.0.0/0 route; a VPN installing a
     #     low-metric /0 (IKEv2, NordLynx) makes it switch interface and reset every connection -
     #     including the flow the VPN itself runs on. Apps are unaffected: they use the /1 routes.
-    foreach ($a in @($Env.Nord.Adapters)) {
+    foreach ($a in @($(if ($GuardOnly) { @() } else { $Env.Nord.Adapters }))) {
         if ($null -ne $a.Metric4) {
             $items.Add([ordered]@{ kind = 'ifmetric'; purpose = 'vpn-metric'; ifIndex = [int]$a.ifIndex; alias = $a.Alias; metric = $script:VpnInterfaceMetric })
         }
     }
 
     $nordAct = $Env.Nord.Active
-    if ($nordAct -and $Env.Nord.Connected) {
+    if ($GuardOnly) { $nordEps = @() }      # guard mode: no chained VPN to steer
+    if (-not $GuardOnly -and $nordAct -and $Env.Nord.Connected) {
         $nh = if ($nordAct.Gateway4) { $nordAct.Gateway4 } else { '0.0.0.0' }
         foreach ($half in '0.0.0.0/1', '128.0.0.0/1') {
             $items.Add([ordered]@{ kind = 'route'; purpose = 'nord-default'; family = 4; prefix = $half; ifIndex = [int]$nordAct.ifIndex; alias = $nordAct.Alias; nextHop = $nh; metric = 0 })
@@ -155,7 +160,7 @@ function Get-DesiredState {
     $allow4 += $(if ($cfg.allowLan) { $script:LanAllow4 } else { $script:LinkAllow4 })
     $allow6 += $(if ($cfg.allowLan) { $script:LanAllow6 } else { $script:LinkAllow6 })
     # NordVPN endpoints must never be allowed on WAN, even if a user allow-list overlaps them.
-    if ($cfg.killSwitch) {
+    if ($cfg.killSwitch -or $GuardOnly) {     # the guard IS the kill switch
         $items.Add((New-RuleSpec 'killswitch-v4' 'Any' (Get-RangeComplement -Exclude $allow4 -Family 4) @() $wan))
         $items.Add((New-RuleSpec 'killswitch-v6' 'Any' (Get-RangeComplement -Exclude $allow6 -Family 6) @() $wan))
     }
@@ -177,7 +182,7 @@ function Get-DesiredState {
     }
 
     # 5. IPv6: only NordVPN may carry IPv6 (block-if-unsafe), or nothing may (block-all).
-    if ($cfg.ipv6Policy -ne 'allow') {
+    if ($cfg.ipv6Policy -ne 'allow' -and -not $GuardOnly) {   # guard: killswitch-v6 already covers the WAN
         if (-not $cfg.killSwitch) {
             $items.Add((New-RuleSpec 'ipv6-wan' 'Any' (Get-RangeComplement -Exclude $allow6 -Family 6) @() $wan))
         }
@@ -368,6 +373,7 @@ function Write-Unavailable {
     foreach ($w in $Why) { Write-Host "  reason : $w" -ForegroundColor Red }
     foreach ($f in $Fix) { Write-Host "  fix    : $f" -ForegroundColor Yellow }
     Write-Log START "CHAIN_UNAVAILABLE ($Code): $($Why -join ' | ')" -Level ERROR
+    foreach ($f in $Fix) { Write-Log FIX $f -Level WARN }     # the terminal app shows these on its result card
 }
 
 function Invoke-NordCli {
@@ -478,15 +484,90 @@ function Write-VerificationReport {
 # Commands
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# Leak guard (always-on protection, independent of a chained VPN)
+# ----------------------------------------------------------------------------
+
+function Restore-GuardState {
+    # Reconcile the session down to guard-only items (removes VPN routes, keeps the kill switch).
+    param($Config, $Session)
+    $env = Get-ChainEnvironment $Config $Session
+    Invoke-WithLock {
+        [void](Invoke-Reconcile $Session (Get-DesiredState $env -GuardOnly))
+        $Session.status = 'guard'
+        $Session.context.nordEndpoints = @()
+        Save-Session $Session
+    }
+    Write-Log GUARD 'leak guard ON: traffic can only leave through v2ray' -Level OK
+    return 0
+}
+
+function Invoke-GuardOn {
+    param($Config)
+    $existing = Read-Session
+    if ($existing -and $existing.status -in @('guard', 'active')) { Write-Log GUARD "leak guard already on ($($existing.status))" -Level OK; return 0 }
+    if ($existing -or @(Get-NetFirewallRule -Group $script:FirewallGroup -ErrorAction SilentlyContinue).Count) {
+        Write-Log GUARD 'cleaning up an interrupted session first' -Level WARN
+        [void](Invoke-Stop $Config @{ DisconnectNord = $false } -Reset)
+    }
+    $env0 = Get-ChainEnvironment $Config $null
+    $up = $env0.Upstream
+    if ($up.Mode -ne 'tun') {
+        Write-Unavailable 'GUARD_NO_UPSTREAM' @('No v2ray TUN tunnel is running - there is no safe path to route through.') @('Start v2rayN / sing-box with TUN mode ON, then turn the leak guard on.')
+        return 3
+    }
+    if (-not $up.Servers.Count) {
+        Write-Unavailable 'GUARD_UPSTREAM_UNKNOWN' @('The v2ray server address could not be determined, so the guard cannot keep v2ray itself reachable.') @('Settings > Extra v2ray servers: add your v2ray server IP.')
+        return 3
+    }
+    $fw = Test-FirewallActive
+    if (-not $fw.Ok) {
+        Write-Unavailable 'FIREWALL_DISABLED' @("Windows Firewall is off (profiles: $($fw.DisabledProfiles -join ', ')) - the guard would have no effect.") @('Turn Windows Firewall on for all profiles.')
+        return 3
+    }
+    $ip0 = Get-PublicIp -Services $Config.ipCheckServices -FirstOnly
+    $session = New-Session
+    $session.status = 'guard'
+    $session.snapshot = Get-NetworkSnapshot
+    $session.context = [ordered]@{
+        upstreamAlias = $up.Adapter.Alias; upstreamIfIndex = $up.Adapter.ifIndex
+        upstreamServers = @($up.Servers); upstreamExitIp = $ip0.Ip
+        upstreamServerNames = @($up.ServerNames); bootstrapDns = @($up.BootstrapDns)
+        nordEndpoints = @(); nordConnectedAtStart = $false; provider = $script:ChainVpn.Key
+        config = [ordered]@{ killSwitch = $true; dnsLeakProtection = $Config.dnsLeakProtection; ipv6Policy = $Config.ipv6Policy }
+    }
+    Save-Session $session
+    $ok = $false
+    try {
+        Invoke-WithLock { [void](Invoke-Reconcile $session (Get-DesiredState $env0 -GuardOnly)) }
+        # The guard must not break v2ray itself: check the internet still works through it.
+        $ip1 = Get-PublicIp -Services $Config.ipCheckServices -FirstOnly
+        if (-not $ip1.Ip) { Start-Sleep -Seconds 5; $ip1 = Get-PublicIp -Services $Config.ipCheckServices -FirstOnly }
+        if (-not $ip1.Ip) {
+            Write-Unavailable 'GUARD_BLOCKED_UPSTREAM' @("With the guard on, v2ray could not reach the internet. Allowed v2ray servers: $($up.Servers -join ', ').") @('Settings > Extra v2ray servers: add every server IP your v2ray profile uses, then try again.')
+            return 3
+        }
+        $ok = $true
+        Write-Log GUARD "leak guard ON: traffic can only leave through v2ray (exit $($ip1.Ip))" -Level OK
+        return 0
+    } finally {
+        if (-not $ok) { $s = Read-Session; if ($s) { [void](Invoke-WithLock { Undo-All $s }); Remove-SessionFile }; Write-Log ROLLBACK 'configuration restored' -Level OK }
+    }
+}
+
 function Invoke-Start {
     param($Config, [hashtable]$Opt)
     $existing = Read-Session
-    if ($existing -and $existing.status -in @('starting','waiting-nordvpn','active','stopping','corrupt')) {
+    # A running leak guard is adopted: the chain is built on top of it, so protection never drops.
+    $adopt = [bool]($existing -and $existing.status -eq 'guard')
+    if ($existing -and -not $adopt -and $existing.status -in @('starting','waiting-nordvpn','active','stopping','corrupt')) {
         Write-Host "A vpn-chain session already exists (status: $($existing.status)). Use 'status', 'stop' or 'reset'." -ForegroundColor Yellow
         return 1
     }
-    $stale = @(Get-NetFirewallRule -Group $script:FirewallGroup -ErrorAction SilentlyContinue).Count + @(Get-OrphanChainNrptRules).Count
-    if ($stale) { Write-Host "Found $stale leftover vpn-chain rule(s) from an interrupted session. Run '.\vpn-chain.cmd reset' first." -ForegroundColor Yellow; return 1 }
+    if (-not $adopt) {
+        $stale = @(Get-NetFirewallRule -Group $script:FirewallGroup -ErrorAction SilentlyContinue).Count + @(Get-OrphanChainNrptRules).Count
+        if ($stale) { Write-Host "Found $stale leftover vpn-chain rule(s) from an interrupted session. Run '.\vpn-chain.cmd reset' first." -ForegroundColor Yellow; return 1 }
+    }
 
     Write-Banner 'Detecting environment'
     $install = Get-NordVpnInstall $Config
@@ -578,9 +659,15 @@ function Invoke-Start {
         Write-Log NORDVPN 'NordVPN is already connected. Its first handshake may not have used the upstream; after start completes, reconnect NordVPN once.' -Level WARN
     }
 
-    # Snapshot + session.
-    $session = New-Session
-    $session.snapshot = Get-NetworkSnapshot
+    # Snapshot + session (or adopt the running leak guard and keep its original snapshot/journal).
+    if ($adopt) {
+        $session = $existing
+        $session.status = 'starting'
+        Write-Log GUARD 'leak guard is on - building the chain on top of it (no unprotected moment)' -Level OK
+    } else {
+        $session = New-Session
+        $session.snapshot = Get-NetworkSnapshot
+    }
     $session.context = [ordered]@{
         upstreamAlias = $up.Adapter.Alias; upstreamIfIndex = $up.Adapter.ifIndex
         upstreamServers = @($up.Servers); upstreamExitIp = $upstreamExit
@@ -657,6 +744,7 @@ function Invoke-Start {
         if (-not $online) { Write-Log VERIFY 'no TCP connectivity through NordVPN after 45s' -Level WARN }
 
         Write-Banner 'Verifying chain'
+        Write-Log VERIFY 'verifying the chain with real traffic (IP, DNS, IPv6, 4 MB download)'
         $session = Read-Session
         $v = Invoke-ChainVerification -Env $envN -Session $session -Traffic
         Write-VerificationReport $envN $v $session
@@ -676,9 +764,15 @@ function Invoke-Start {
         Write-Log VERIFY 'chain healthy' -Level OK
     } finally {
         if (-not $committed) {
-            Write-Banner 'Rolling back' 'Yellow'
             $s = Read-Session
-            if ($s) { $s.status = 'stopping'; Save-Session $s; $fail = Invoke-WithLock { Undo-All $s }; if (-not $fail) { Remove-SessionFile; Write-Log ROLLBACK 'configuration restored' -Level OK } else { Write-Log ROLLBACK "$fail item(s) could not be removed; run 'vpn-chain reset'" -Level ERROR } }
+            if ($s -and $adopt) {
+                # Fall back to the leak guard - never to an unprotected network.
+                Write-Banner 'Returning to leak guard' 'Yellow'
+                try { [void](Restore-GuardState $Config $s) } catch { Write-Log ROLLBACK "could not return to leak guard: $($_.Exception.Message)" -Level ERROR }
+            } else {
+                Write-Banner 'Rolling back' 'Yellow'
+                if ($s) { $s.status = 'stopping'; Save-Session $s; $fail = Invoke-WithLock { Undo-All $s }; if (-not $fail) { Remove-SessionFile; Write-Log ROLLBACK 'configuration restored' -Level OK } else { Write-Log ROLLBACK "$fail item(s) could not be removed; run 'vpn-chain reset'" -Level ERROR } }
+            }
         }
     }
     [void](Write-StatusSummary -Config $Config)
@@ -693,11 +787,14 @@ function Invoke-MonitorTick {
     param($Config)
     Invoke-WithLock {
         $s = Read-Session
-        if (-not $s -or $s.status -ne 'active') { return @{ Exit = $true } }
+        if (-not $s -or $s.status -notin @('active', 'guard')) { return @{ Exit = $true } }
+        $guard = ($s.status -eq 'guard')
         $env = Get-ChainEnvironment $Config $s
-        if ($env.Nord.Connected -and $env.Nord.Endpoints.Count) { $s.context.nordEndpoints = @($env.Nord.Endpoints) }
+        if (-not $guard -and $env.Nord.Connected -and $env.Nord.Endpoints.Count) { $s.context.nordEndpoints = @($env.Nord.Endpoints) }
         if ($env.Upstream.Adapter) { $s.context.upstreamIfIndex = $env.Upstream.Adapter.ifIndex; $s.context.upstreamAlias = $env.Upstream.Adapter.Alias }
-        $changes = Invoke-Reconcile $s (Get-DesiredState $env -NordPhase)
+        # Keep newly used v2ray servers allowed (server switch in v2rayN), so the guard never blocks v2ray itself.
+        $s.context.upstreamServers = @(@($s.context.upstreamServers) + @($env.Upstream.Servers) | Where-Object { $_ } | Select-Object -Unique)
+        $changes = Invoke-Reconcile $s $(if ($guard) { Get-DesiredState $env -GuardOnly } else { Get-DesiredState $env -NordPhase })
         @{
             Exit = $false; Changes = $changes; Env = $env
             Ep = (@($env.Nord.Endpoints) -join ',')
@@ -784,6 +881,12 @@ function Invoke-Stop {
             $until = (Get-Date).AddSeconds(30)
             while ((Get-Date) -lt $until -and (Get-NordVpnInfo -Inventory @(Get-InterfaceInventory) -Config $Config).Connected) { Start-Sleep -Seconds 2 }
         } catch { Write-Log NORDVPN $_.Exception.Message -Level WARN }
+    }
+
+    # Disconnect the chained VPN but keep the leak guard: back to "v2ray only", never unprotected.
+    if ($Opt.KeepGuard -and -not $Reset -and $session.Contains('id') -and $session.status -in @('active', 'guard')) {
+        Write-Banner 'Disconnecting VPN, keeping the leak guard'
+        return (Restore-GuardState $Config $session)
     }
 
     Write-Banner $(if ($Reset) { 'Resetting (crash recovery)' } else { 'Stopping chain' })

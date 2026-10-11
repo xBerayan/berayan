@@ -14,6 +14,8 @@ $script:ScreenSize = ''
 $script:Dot = [string][char]0x25A0     # filled square (present in every console font)
 $script:HLine = [string][char]0x2500   # box-drawing horizontal line
 $script:TuiReadOnly = $false
+$script:GuardUserOff = $false      # user turned the guard off this session: don't auto-enable it again
+$script:GuardAutoFailed = $false   # a background auto-enable failed: don't retry every tick
 $script:Dash = @{
     Scanned = $false; UpMode = '-'; UpAdapter = ''; UpProcs = ''; UpExit = ''
     VpnName = ''; VpnUp = $false; VpnProto = ''; VpnWhere = ''
@@ -210,7 +212,7 @@ function Select-FromScrollList {
                 if ($script:Vt) { [Console]::Write("  $script:E[1;31m>$script:E[0m $script:E[7m $line $script:E[0m`r`n") }
                 else { Write-Tui "  >  $line" 'BoldRed' }
             } else {
-                Write-Segments @(@('     ', 'DarkGray'), @($label, $(if ($it.Group -eq 'special') { 'Cyan' } else { 'White' })), @($detail, 'DarkGray'))
+                Write-Segments @(@('     ', 'DarkGray'), @($label, $(switch ($it.Group) { 'special' { 'Cyan' } 'static' { 'Magenta' } default { 'White' } })), @($detail, 'DarkGray'))
             }
         }
         for ($i = $end - $top; $i -lt $page; $i++) { Write-Tui '' }
@@ -296,6 +298,7 @@ function Update-Dashboard {
         if ($ws -and $ws.Connect) { $d.VpnWhere = ($ws.Connect -replace '^(Connected|Connecting):\s*', '') }
     }
     $d.Session = [bool]($s -and $s.status -eq 'active')
+    $d.Guard = [bool]($s -and $s.status -in @('active', 'guard'))
     $st = if ($Tick -and $Tick.State) { $Tick.State } else { Get-ChainState (Get-LocalFacts $env $s) }
     $d.State = $st.State; $d.Reasons = @($st.Reasons)
     $journal = if ($s) { @($s.journal | Where-Object { $_.status -eq 'applied' }) } else { @() }
@@ -326,17 +329,27 @@ function Get-DashboardLines {
     $vpnTxt = if ($d.VpnUp) { "$($d.VpnName) connected" } else { "$($d.VpnName) disconnected" }
     $lines += , @(@('  VPN        ', 'DarkGray'), @($script:Dot, $(if ($d.VpnUp) { 'Green' } else { 'DarkGray' })), @(" $vpnTxt", 'White'), @("   $($vpnDetail -join '  |  ')", 'Gray'))
 
-    $chainColor = switch ($d.State) { 'CHAIN_OK' { 'Green' } 'UPSTREAM_ONLY' { 'Yellow' } 'UNKNOWN' { 'Yellow' } default { 'Red' } }
-    $chainTxt = if ($d.State -eq 'CHAIN_OK') { 'HEALTHY' } else { $d.State }
-    $repair = if ($d.Session) { "auto-repair ON  (checked $($d.LastTick.ToString('HH:mm:ss')))" } else { 'not active' }
-    $lines += , @(@('  CHAIN      ', 'DarkGray'), @($script:Dot, $chainColor), @(" $chainTxt", $(if ($d.State -eq 'CHAIN_OK') { 'BoldGreen' } else { 'White' })), @("   $repair", 'Gray'))
+    if ($d.Session) {
+        $chainColor = switch ($d.State) { 'CHAIN_OK' { 'Green' } 'UPSTREAM_ONLY' { 'Yellow' } 'UNKNOWN' { 'Yellow' } default { 'Red' } }
+        $chainTxt = if ($d.State -eq 'CHAIN_OK') { 'HEALTHY' } else { $d.State }
+        $lines += , @(@('  CHAIN      ', 'DarkGray'), @($script:Dot, $chainColor), @(" $chainTxt", $(if ($d.State -eq 'CHAIN_OK') { 'BoldGreen' } else { 'White' })), @("   apps -> $($d.VpnName) -> v2ray -> internet", 'Gray'))
+    } else {
+        $lines += , @(@('  CHAIN      ', 'DarkGray'), @($script:Dot, 'DarkGray'), @(' not connected', 'White'), @('   press 1 to connect a VPN through v2ray', 'DarkGray'))
+    }
+
+    if ($d.Guard -and $upOk) {
+        $lines += , @(@('  LEAK GUARD ', 'DarkGray'), @($script:Dot, 'Green'), @(' ON', 'BoldGreen'), @("   only v2ray can reach the internet  |  auto-repair $($d.LastTick.ToString('HH:mm:ss'))", 'Gray'))
+    } elseif ($d.Guard) {
+        $lines += , @(@('  LEAK GUARD ', 'DarkGray'), @($script:Dot, 'Yellow'), @(' ON - BLOCKING', 'BoldYellow'), @('   v2ray is down: internet blocked so your real IP cannot leak', 'Yellow'))
+    } else {
+        $lines += , @(@('  LEAK GUARD ', 'DarkGray'), @($script:Dot, 'Red'), @(' OFF', 'BoldRed'), @('   if v2ray drops, your real IP is exposed  -  press G', 'Gray'))
+    }
 
     $ipTxt = if ($d.PublicIp) { $d.PublicIp } else { '-' }
     $ipWhen = if ($d.PublicAt) { "   (checked $($d.PublicAt.ToString('HH:mm:ss')))" } else { '   (press R to check)' }
     $lines += , @(@('  PUBLIC IP  ', 'DarkGray'), @("  $ipTxt", 'BoldCyan'), @($ipWhen, 'DarkGray'))
-    $lines += , @(@('  GUARDS     ', 'DarkGray'), @("  $($d.Guards)", 'Gray'))
     $why = @($d.Reasons | Select-Object -First 1)
-    $lines += , @(@('             ', 'DarkGray'), @($(if ($why.Count -and $d.State -ne 'CHAIN_OK') { "  $($why[0])" } else { '' }), 'Yellow'))
+    $lines += , @(@('             ', 'DarkGray'), @($(if ($d.Session -and $why.Count -and $d.State -ne 'CHAIN_OK') { "  $($why[0])" } else { '' }), 'Yellow'))
     return $lines
 }
 
@@ -377,7 +390,8 @@ function Write-MainScreen {
     $ro = $script:TuiReadOnly
     $active = $script:Dash.Session
     Write-MenuItem '1' $(if ($active) { 'Reconnect / change VPN' } else { 'Connect' }) $(if ($ro) { 'choose VPN  ->  protocol  ->  location  (connecting needs Administrator)' } else { 'choose VPN  ->  protocol  ->  location' })
-    Write-MenuItem '2' 'Disconnect' 'stop the chain and restore normal networking' -Disabled:($ro -or -not $active)
+    Write-MenuItem '2' 'Disconnect' 'VPN off (leak guard stays on), or everything off' -Disabled:($ro -or -not $active)
+    Write-MenuItem 'G' $(if ($script:Dash.Guard) { 'Leak guard: ON' } else { 'Leak guard: OFF' }) $(if ($script:Dash.Guard) { 'press to turn off' } else { 'press to turn on - blocks your real IP if v2ray drops' }) -Disabled:$ro
     Write-MenuItem '3' 'Full test' 'public IP, DNS, IPv6, traffic proof'
     Write-MenuItem '4' 'Diagnose' 'adapters, routes, upstream, VPN details'
     Write-MenuItem '5' 'Settings' 'kill switch, DNS, IPv6, upstream servers'
@@ -396,13 +410,170 @@ function Invoke-TuiAction {
     Write-Tui ''
     Write-Tui "  $Title" 'BoldRed'
     Write-Tui ("  " + ($script:HLine * [Math]::Max(10, $Title.Length))) 'Red'
-    $script:LogQuiet = $false
+    $script:LogQuiet = $true        # reports only - log lines never reach the screen
     $script:Interactive = $true
     $result = $null
     try { $result = & $Body }
     catch { Write-Tui ''; Write-Tui "  Error: $($_.Exception.Message)" 'BoldRed'; Write-Log TUI "action '$Title' failed: $($_.Exception.Message)" -Level ERROR }
     if (-not $NoPause) { Wait-AnyKey }
     return $result
+}
+
+# ----------------------------------------------------------------------------
+# Clean progress view for operations (connect, leak guard, disconnect, reset)
+# ----------------------------------------------------------------------------
+
+$script:Op = $null
+
+function New-OpPhases {
+    param([string]$Kind)
+    $defs = switch ($Kind) {
+        'connect'    { @(@('v2ray', 'Check v2ray tunnel'), @('guard', 'Leak guard'), @('vpn', "Connect $($script:ChainVpn.Display)"), @('routes', 'Route VPN through v2ray'), @('verify', 'Verify (IP, DNS, IPv6, traffic)')) }
+        'guard-on'   { @(@('v2ray', 'Check v2ray tunnel'), @('guard', 'Turn on leak guard'), @('verify', 'Check internet through v2ray')) }
+        'disconnect' { @(@('vpn', "Disconnect $($script:ChainVpn.Display)"), @('restore', 'Remove VPN routes'), @('verify', 'Check internet')) }
+        default      { @(@('restore', 'Remove Berayan changes'), @('verify', 'Check internet')) }
+    }
+    @($defs | ForEach-Object { [pscustomobject]@{ Key = $_[0]; Label = $_[1]; State = 'wait'; Detail = '' } })
+}
+
+function Set-OpPhase {
+    param([string]$Key, [string]$State, [string]$Detail)
+    $p = @($script:Op.Phases | Where-Object Key -eq $Key) | Select-Object -First 1
+    if (-not $p) { return }
+    if ($p.State -eq 'fail' -and $State -ne 'fail') { return }
+    # Starting a later phase completes the earlier running ones.
+    if ($State -eq 'run') { foreach ($q in $script:Op.Phases) { if ($q -eq $p) { break }; if ($q.State -eq 'run') { $q.State = 'done' } } }
+    $p.State = $State
+    if ($Detail) { $p.Detail = $Detail }
+}
+
+function Get-OpCurrentKey {
+    $r = @($script:Op.Phases | Where-Object State -eq 'run') | Select-Object -First 1
+    if (-not $r) { $r = @($script:Op.Phases | Where-Object State -eq 'wait') | Select-Object -First 1 }
+    if ($r) { $r.Key } else { $null }
+}
+
+function Update-OpFromLog {
+    # Turns engine log events into progress-step updates (the log file keeps the full detail).
+    param([string]$Tag, [string]$Msg, [string]$Level)
+    if (-not $script:Op) { return }
+    $vpnTag = Get-VpnTag
+    switch -Regex ($Tag) {
+        '^FIX$' { $script:Op.Fixes += $Msg; return }
+    }
+    if ($Tag -eq 'START' -and $Msg -match 'CHAIN_UNAVAILABLE \(([A-Z_]+)\): (.*)') { $script:Op.Error = $Matches[2]; $k = Get-OpCurrentKey; if ($k) { Set-OpPhase $k 'fail' '' } }
+    elseif ($Tag -eq 'UPSTREAM') {
+        if ($Msg -match 'adapter detected: (\S+)') { Set-OpPhase 'v2ray' 'run' "tunnel $($Matches[1])" }
+        elseif ($Msg -match 'upstream working, exit IP (\S+)') { Set-OpPhase 'v2ray' 'done' "v2ray exit $($Matches[1])" }
+        elseif ($Msg -match 'not present yet') { Set-OpPhase 'v2ray' 'run' 'waiting for the v2ray TUN adapter ...' }
+    }
+    elseif ($Tag -eq 'GUARD') {
+        if ($Msg -match 'building the chain on top') { Set-OpPhase 'v2ray' 'done' ''; Set-OpPhase 'guard' 'done' 'already on' }
+        elseif ($Msg -match 'leak guard ON.*exit (\S+)\)') { Set-OpPhase 'guard' 'done' 'only v2ray can reach the internet'; Set-OpPhase 'verify' 'done' "internet OK via v2ray ($($Matches[1]))" }
+        elseif ($Msg -match 'leak guard ON') { Set-OpPhase 'guard' 'done' 'only v2ray can reach the internet'; Set-OpPhase 'restore' 'done' 'back to v2ray-only protection' }
+    }
+    elseif ($Tag -in @('FIREWALL', 'DNS', 'IPV6') -and $Msg -match 'guard active') { Set-OpPhase 'guard' 'run' 'blocking the physical network ...' }
+    elseif ($Tag -eq 'ROUTE') {
+        if ($Msg -match 'upstream server pinned|bootstrap DNS pinned') { Set-OpPhase 'guard' 'run' 'pinning the v2ray server ...' }
+        elseif ($Msg -match 'endpoint pinned') { Set-OpPhase 'routes' 'run' 'VPN server pinned into v2ray' }
+        elseif ($Msg -match 'default route forced') { Set-OpPhase 'routes' 'run' 'apps routed into the VPN' }
+        elseif ($Msg -match 'interface metric') { Set-OpPhase 'routes' 'run' 'v2ray kept on the physical network' }
+    }
+    elseif ($Tag -eq 'VERIFY') {
+        if ($Msg -match 'upstream still healthy with leak guard') { Set-OpPhase 'guard' 'done' 'on - v2ray still works' }
+        elseif ($Msg -match 'verifying the chain') { Set-OpPhase 'verify' 'run' 'testing ...' }
+        elseif ($Msg -match 'final public IP (\S+)') { $script:Op.Ip = $Matches[1] }
+        elseif ($Msg -match '^state CHAIN_OK') { Set-OpPhase 'verify' 'done' 'chain healthy' }
+        elseif ($Msg -match '^state (\S+)\s*(.*)') { $script:Op.Error = $(if ($Matches[2]) { $Matches[2] } else { $Matches[1] }); Set-OpPhase 'verify' 'fail' $Matches[1] }
+        elseif ($Msg -match 'no TCP connectivity') { Set-OpPhase 'routes' 'run' 'no traffic through the VPN yet ...' }
+        elseif ($Msg -match 'normal connectivity OK, public IP now (\S+)') { $script:Op.Ip = $Matches[1]; Set-OpPhase 'verify' 'done' "internet OK ($($Matches[1]))" }
+        elseif ($Msg -match 'no Internet connectivity after restore') { Set-OpPhase 'verify' 'fail' 'no internet - check v2rayN' }
+    }
+    elseif ($Tag -eq 'ROLLBACK') {
+        if ($Msg -match 'configuration restored') { Set-OpPhase 'restore' 'done' 'network restored' }
+        elseif ($Msg -match 'removed|restored') { Set-OpPhase 'restore' 'run' 'removing changes ...' }
+        if ($script:Op.Kind -eq 'disconnect') { Set-OpPhase 'vpn' 'done' '' }
+    }
+    elseif ($Tag -eq $vpnTag -or $Tag -eq 'VPN') {
+        if ($Msg -match 'running documented CLI: .*disconnect') { Set-OpPhase 'vpn' 'run' 'disconnecting ...' }
+        elseif ($Msg -match 'running documented CLI') { Set-OpPhase 'vpn' 'run' 'connecting ...' }
+        elseif ($Msg -match 'not sending a connect') { Set-OpPhase 'vpn' 'run' 'already connecting - waiting ...' }
+        elseif ($Msg -match 'adapter detected: .*protocol=(\S+)') { Set-OpPhase 'vpn' 'done' "connected ($($Matches[1]))" }
+        elseif ($Msg -match 'CONFLICT: (.*)') { $script:Op.Warnings += $Matches[1] }
+        elseif ($Msg -match 'using \S+ port (\d+)') { Set-OpPhase 'vpn' 'run' "connecting (port $($Matches[1]), v2ray-safe) ..." }
+    }
+    if ($Level -eq 'ERROR' -and -not $script:Op.Error -and $Tag -notin @('TUI')) {
+        $script:Op.Error = $Msg; $k = Get-OpCurrentKey; if ($k) { Set-OpPhase $k 'fail' '' }
+    }
+    Write-OpPhases
+}
+
+function Write-OpPhases {
+    param([switch]$Force)
+    if (-not $script:Op) { return }
+    if (-not $script:Vt -and -not $Force) { return }     # no in-place redraw without VT: print once at the end
+    $w = [Console]::WindowWidth
+    $row = $script:Op.Row
+    foreach ($p in $script:Op.Phases) {
+        if ($script:Vt) { [Console]::Write("$script:E[$row;1H$script:E[2K") }
+        $tag = switch ($p.State) { 'done' { @(' OK ', 'BoldGreen') } 'run' { @(' .. ', 'BoldYellow') } 'fail' { @('FAIL', 'BoldRed') } 'skip' { @(' -- ', 'DarkGray') } default { @('    ', 'DarkGray') } }
+        $label = $p.Label.PadRight(34)
+        $detail = [string]$p.Detail
+        $max = [Math]::Max(0, $w - 48)
+        if ($detail.Length -gt $max) { $detail = $detail.Substring(0, $max) }
+        Write-Segments @(@('   [', 'DarkGray'), $tag, @('] ', 'DarkGray'), @($label, $(if ($p.State -eq 'wait') { 'DarkGray' } else { 'White' })), @($detail, $(if ($p.State -eq 'fail') { 'Red' } else { 'Gray' })))
+        $row++
+    }
+    if ($script:Vt) { [Console]::Write("$script:E[$row;1H") }
+}
+
+function Invoke-TuiOperation {
+    # Runs an engine operation behind a clean step list; returns the engine's exit code.
+    param([string]$Title, [string]$Kind, [scriptblock]$Body)
+    Clear-Content
+    Set-CursorVisible $false
+    Write-Tui ''
+    Write-Tui "  $Title" 'BoldRed'
+    Write-Tui ("  " + ($script:HLine * [Math]::Max(10, $Title.Length))) 'Red'
+    Write-Tui ''
+    $script:Op = [pscustomobject]@{ Kind = $Kind; Phases = @(New-OpPhases $Kind); Row = $script:HeaderRows + 5; Error = ''; Fixes = @(); Warnings = @(); Ip = '' }
+    if (-not $script:Vt) { $script:Op.Row = 0 }
+    Write-OpPhases -Force
+    if ($Kind -eq 'connect') { Write-Tui ''; Write-Tui '  Esc cancels (everything is rolled back; the leak guard stays on).' 'DarkGray' }
+    $script:LogQuiet = $true; $script:ConsoleMute = $true; $script:Interactive = $true
+    $script:LogHook = { param($t, $m, $l) Update-OpFromLog $t $m $l }
+    $rc = 1
+    try { $rc = @(& $Body)[-1] }
+    catch { $script:Op.Error = $_.Exception.Message; $k = Get-OpCurrentKey; if ($k) { Set-OpPhase $k 'fail' '' }; Write-Log TUI "operation '$Title' failed: $($_.Exception.Message)" -Level ERROR }
+    finally { $script:LogHook = $null; $script:ConsoleMute = $false }
+    $ok = ($rc -eq 0 -and -not $script:Op.Error)
+    foreach ($p in $script:Op.Phases) {
+        if ($p.State -eq 'run') { $p.State = $(if ($ok) { 'done' } else { 'fail' }) }
+        elseif ($p.State -eq 'wait') { $p.State = 'skip' }
+    }
+    Write-OpPhases -Force
+    if (-not $script:Vt) { Write-Tui '' }
+    return [pscustomobject]@{ Ok = $ok; Code = $rc; Error = $script:Op.Error; Fixes = @($script:Op.Fixes | Select-Object -Unique); Warnings = @($script:Op.Warnings | Select-Object -Unique); Ip = $script:Op.Ip }
+}
+
+function Write-ResultCard {
+    param($Result, [string]$OkTitle, [string[]]$OkLines = @(), [string]$FailTitle)
+    $row = $script:HeaderRows + 6 + @($script:Op.Phases).Count
+    if ($script:Vt) { [Console]::Write("$script:E[$row;1H$script:E[0J") }
+    Write-Tui ''
+    if ($Result.Ok) {
+        Write-Tui "  $OkTitle" 'BoldGreen'
+        foreach ($l in $OkLines) { Write-Tui "  $l" 'White' }
+    } else {
+        Write-Tui "  $FailTitle" 'BoldRed'
+        if ($Result.Error) { Write-Tui "  Why: $($Result.Error)" 'Yellow' }
+        foreach ($f in $Result.Fixes) { Write-Tui "  Fix: $f" 'Cyan' }
+        foreach ($wn in ($Result.Warnings | Select-Object -First 2)) { Write-Tui "  Note: $wn" 'DarkGray' }
+    }
+    $s = Read-Session
+    if ($s -and $s.status -in @('guard', 'active')) { Write-Tui '  Leak guard is ON - your real IP cannot leak.' 'Green' }
+    Write-Tui "  Details: View log (7)" 'DarkGray'
+    Wait-AnyKey
 }
 
 function Select-FromList {
@@ -493,7 +664,19 @@ function Invoke-ConnectWizard {
     $pick = Select-FromScrollList "CONNECT  -  $($script:ChainVpn.Display)  |  $($proto.Label)" 'Step 3/3  -  Choose a location' $locItems $lIdx
     if (-not $pick) { return }
     $loc = [string]$pick.Value
-    if ($loc -eq '__custom__') {
+    if ($loc -eq '__static__') {
+        Clear-Content
+        Write-Tui ''
+        Write-Tui "  CONNECT  -  $($script:ChainVpn.Display)  |  $($proto.Label)  |  static IP" 'BoldRed'
+        Write-Tui ''
+        Write-Tui '  Your Windscribe static IPs are listed at windscribe.com > My Account > Static IPs.' 'DarkGray'
+        Write-Tui '  Type its city (e.g. Washington DC) or its IP address.' 'DarkGray'
+        Write-Tui ''
+        $v = Read-Text 'Static IP (city or IP)' ''
+        if (-not $v) { return }
+        $loc = "static:$v"
+    }
+    elseif ($loc -eq '__custom__') {
         Clear-Content
         Write-Tui ''
         Write-Tui "  CONNECT  -  $($script:ChainVpn.Display)  |  $($proto.Label)" 'BoldRed'
@@ -543,17 +726,25 @@ function Invoke-ConnectWizard {
     if (-not (Read-YesNo 'Connect now?' $true)) { return }
 
     $wsProto = if ($prov -eq 'windscribe') { $proto.Id } else { $null }
-    Invoke-TuiAction "Connecting $($script:ChainVpn.Display) ($($proto.Label)) through v2ray   -   Esc cancels" {
-        if ($existing -and $existing.status -in @('active', 'starting', 'waiting-nordvpn', 'stopping', 'corrupt')) {
+    $where = if ($loc -like 'static:*') { "static IP $($loc.Substring(7))" } elseif ($loc) { $loc } else { 'best location' }
+    $res = Invoke-TuiOperation "CONNECTING  $($script:ChainVpn.Display)  |  $($proto.Label)  |  $where" 'connect' {
+        if ($existing -and $existing.status -eq 'active') {
+            # switching VPN/location: drop the old chain but keep the leak guard underneath
+            [void](Invoke-Stop $Config @{ DisconnectNord = $true; KeepGuard = $true })
+        } elseif ($existing -and $existing.status -in @('starting', 'waiting-nordvpn', 'stopping', 'corrupt')) {
             [void](Invoke-Stop $Config @{ DisconnectNord = $false } -Reset)
         }
         $opt = @{ NoMonitor = $true; Connect = $true; Location = $loc; Protocol = $wsProto; NordServer = $null; KeepOnFailure = $false; DisconnectNord = $false }
-        $rc = @(Invoke-Start $Config $opt)[-1]
-        Write-Tui ''
-        if ($rc -eq 0) { Write-Tui '  Connected. Auto-repair keeps the chain healthy while Berayan stays open.' 'BoldGreen' }
-        else { Write-Tui '  Not connected - see the reasons above. Your network was restored.' 'BoldYellow' }
+        @(Invoke-Start $Config $opt)[-1]
     }
+    $script:LogQuiet = $true
     Update-Dashboard $Config -PublicIp
+    $exit = if ($script:Dash.UpExit) { $script:Dash.UpExit } else { 'v2ray' }
+    Write-ResultCard $res 'CONNECTED' @(
+        "Your IP:   $($script:Dash.PublicIp)   ($($script:ChainVpn.Display) $(if ($script:Dash.VpnWhere) { '- ' + $script:Dash.VpnWhere }))",
+        "Path:      apps  ->  $($script:ChainVpn.Display)  ->  v2ray ($exit)  ->  internet",
+        'DNS only via the VPN, IPv6 blocked, auto-repair on while Berayan is open.'
+    ) 'NOT CONNECTED'
 }
 
 function Invoke-DisconnectScreen {
@@ -562,10 +753,56 @@ function Invoke-DisconnectScreen {
     Write-Tui ''
     Write-Tui '  DISCONNECT' 'BoldRed'
     Write-Tui ''
-    if (-not (Read-YesNo "Stop the chain and restore normal networking?" $true)) { return }
-    $vpnToo = Read-YesNo "Also disconnect $($script:ChainVpn.Display)?" $true
-    Invoke-TuiAction 'Disconnecting' { [void](Invoke-Stop $Config @{ DisconnectNord = $vpnToo }) }
+    Write-MenuItem '1' "Disconnect $($script:ChainVpn.Display), keep the leak guard" 'recommended - internet only through v2ray, your IP stays hidden'
+    Write-MenuItem '2' 'Turn everything off' 'VPN off, leak guard off, normal network restored'
+    Write-Segments @(@('   [', 'DarkGray'), @('Esc', 'BoldRed'), @('] Back', 'DarkGray'))
+    Write-Tui ''
+    Write-Tui '  Select: ' 'BoldWhite' -NoNewline
+    $k = $null
+    while ($k -notin @('1', '2', 'ENTER', 'ESC')) { $k = Read-Key }
+    if ($k -eq 'ESC') { return }
+    $keep = ($k -ne '2')
+    if ($keep) {
+        $res = Invoke-TuiOperation "DISCONNECTING  $($script:ChainVpn.Display)  (leak guard stays on)" 'disconnect' { Invoke-Stop $Config @{ DisconnectNord = $true; KeepGuard = $true } }
+    } else {
+        $res = Invoke-TuiOperation 'TURNING EVERYTHING OFF' 'disconnect' { Invoke-Stop $Config @{ DisconnectNord = $true } }
+        $script:GuardUserOff = $true
+    }
     Update-Dashboard $Config -PublicIp
+    Write-ResultCard $res $(if ($keep) { 'VPN DISCONNECTED - LEAK GUARD ON' } else { 'EVERYTHING OFF' }) @(
+        "Your IP:   $($script:Dash.PublicIp)",
+        $(if ($keep) { 'Internet only through v2ray. If v2ray drops, traffic is blocked instead of leaking.' } else { 'Normal networking restored. Press G to turn the leak guard back on.' })
+    ) 'DISCONNECT INCOMPLETE'
+}
+
+function Invoke-GuardScreen {
+    param($Config)
+    $s = Read-Session
+    if ($s -and $s.status -eq 'active') {
+        Clear-Content; Write-Tui ''; Write-Tui '  LEAK GUARD' 'BoldRed'; Write-Tui ''
+        Write-Tui "  The leak guard is part of the active $($script:ChainVpn.Display) connection." 'White'
+        Write-Tui '  Use 2 (Disconnect) to turn the VPN or everything off.' 'DarkGray'
+        Wait-AnyKey; return
+    }
+    if ($s -and $s.status -eq 'guard') {
+        Clear-Content; Write-Tui ''; Write-Tui '  LEAK GUARD' 'BoldRed'; Write-Tui ''
+        Write-Tui '  Turning the leak guard OFF means: if v2ray drops, apps use your real connection' 'Yellow'
+        Write-Tui '  and your real IP becomes visible.' 'Yellow'
+        Write-Tui ''
+        if (-not (Read-YesNo 'Turn the leak guard OFF?' $false)) { return }
+        $res = Invoke-TuiOperation 'TURNING THE LEAK GUARD OFF' 'reset' { Invoke-Stop $Config @{ DisconnectNord = $false } }
+        $script:GuardUserOff = $true
+        Update-Dashboard $Config -PublicIp
+        Write-ResultCard $res 'LEAK GUARD OFF' @("Your IP:   $($script:Dash.PublicIp)", 'Normal networking. Press G to turn it back on.') 'COULD NOT TURN THE LEAK GUARD OFF'
+        return
+    }
+    $res = Invoke-TuiOperation 'TURNING THE LEAK GUARD ON' 'guard-on' { Invoke-GuardOn $Config }
+    $script:GuardAutoFailed = $false; if ($res.Ok) { $script:GuardUserOff = $false }
+    Update-Dashboard $Config -PublicIp
+    Write-ResultCard $res 'LEAK GUARD ON' @(
+        "Your IP:   $($script:Dash.PublicIp)   (v2ray exit)",
+        'Only v2ray can reach the internet. If v2ray drops, traffic is blocked - your real IP never leaks.'
+    ) 'LEAK GUARD NOT ENABLED'
 }
 
 function Invoke-SettingsScreen {
@@ -583,6 +820,7 @@ function Invoke-SettingsScreen {
         Write-MenuItem '4' ("Allow LAN              " + (& $onoff $Config.allowLan)) 'printers, NAS, router page'
         Write-MenuItem '5' ("Extra v2ray servers    " + $(if (@($Config.upstream.serverAddresses).Count) { @($Config.upstream.serverAddresses) -join ', ' } else { '(auto-detect)' })) 'IPs/CIDRs the kill switch must allow'
         Write-MenuItem '6' ("VPN connect timeout    " + $Config.nordvpn.connectTimeoutSec + ' s') ''
+        Write-MenuItem '7' ("Leak guard on start    " + (& $onoff $Config.guard.autoStart)) 'turn the leak guard on automatically when Berayan opens'
         Write-Segments @(@('   [', 'DarkGray'), @('B', 'BoldRed'), @('] Back', 'DarkGray'))
         Write-Tui ''
         Write-Tui '  Select: ' 'BoldWhite' -NoNewline
@@ -594,6 +832,7 @@ function Invoke-SettingsScreen {
             '4' { Set-UserConfigValue 'allowLan' (-not $Config.allowLan) }
             '5' { Write-Tui ''; $v = Read-Text 'Comma-separated IPs/CIDRs (empty = auto-detect, Esc = keep)' ''; if ($null -ne $v) { Set-UserConfigValue 'upstream.serverAddresses' @($v -split '[,\s]+' | Where-Object { $_ }) } }
             '6' { Write-Tui ''; $v = Read-Text 'Seconds' ([string]$Config.nordvpn.connectTimeoutSec); if ($v -match '^\d+$') { Set-UserConfigValue 'nordvpn.connectTimeoutSec' ([int]$v) } }
+            '7' { Set-UserConfigValue 'guard.autoStart' (-not $Config.guard.autoStart) }
             { $_ -in @('B', 'ESC', 'Q') } { return }
         }
     }
@@ -615,21 +854,25 @@ function Show-LogScreen {
 
 function Invoke-QuitScreen {
     param($Config)
-    if (-not $script:Dash.Session -or $script:TuiReadOnly) { return $true }   # read-only: nothing to stop/repair
+    if (-not $script:Dash.Guard -or $script:TuiReadOnly) { return $true }   # nothing running / read-only
     Clear-Content
     Write-Tui ''
     Write-Tui '  QUIT' 'BoldRed'
     Write-Tui ''
-    Write-Tui '  The chain is active. If Berayan closes, auto-repair stops (protections stay on).' 'Yellow'
+    Write-Tui "  $(if ($script:Dash.Session) { "$($script:ChainVpn.Display) through v2ray and the leak guard are on." } else { 'The leak guard is on.' })" 'White'
     Write-Tui ''
-    Write-MenuItem 'S' 'Stop the chain and quit' 'restores normal networking'
-    Write-MenuItem 'K' 'Keep it running and quit' 'run Berayan again any time to manage it'
+    Write-MenuItem 'S' 'Turn everything off and quit' 'default - VPN off, leak guard off, normal network restored'
+    Write-MenuItem 'K' 'Keep protection on and quit' 'stays fail-closed; auto-repair stops until Berayan is opened again'
     Write-MenuItem 'C' 'Cancel' ''
     Write-Tui ''
     Write-Tui '  Select: ' 'BoldWhite' -NoNewline
     while ($true) {
         switch (Read-Key) {
-            'S' { Invoke-TuiAction 'Disconnecting' { [void](Invoke-Stop $Config @{ DisconnectNord = $true }) } -NoPause; return $true }
+            { $_ -in @('S', 'ENTER') } {
+                $res = Invoke-TuiOperation 'TURNING EVERYTHING OFF' 'disconnect' { Invoke-Stop $Config @{ DisconnectNord = [bool]$script:Dash.Session } }
+                if (-not $res.Ok) { Write-ResultCard $res '' @() 'COULD NOT TURN EVERYTHING OFF - use Reset (6) next time' }
+                return $true
+            }
             'K' { return $true }
             { $_ -in @('C', 'ESC') } { return $false }
         }
@@ -655,10 +898,18 @@ function Start-BerayanTui {
     $prov = Select-VpnProvider -Config $config -Session $s
     Set-VpnProvider $prov
 
+    $script:LogQuiet = $true          # clean UI: log lines go to the log file only, never to the screen
     Set-CursorVisible $false
     Write-Tui ''
     Write-Tui '  Scanning network ...' 'DarkGray'
     Update-Dashboard $config -PublicIp
+
+    # Leak guard on start: protection is on whenever Berayan is on.
+    if (-not $script:TuiReadOnly -and $config.guard.autoStart -and -not $script:Dash.Guard -and $script:Dash.UpMode -eq 'tun') {
+        $res = Invoke-TuiOperation 'TURNING THE LEAK GUARD ON' 'guard-on' { Invoke-GuardOn $config }
+        Update-Dashboard $config -PublicIp
+        if (-not $res.Ok) { Write-ResultCard $res '' @() 'LEAK GUARD NOT ENABLED' }
+    }
 
     $netEvt = 'berayan.net'
     Register-ObjectEvent -InputObject ([System.Net.NetworkInformation.NetworkChange]) -EventName NetworkAddressChanged -SourceIdentifier $netEvt | Out-Null
@@ -676,15 +927,19 @@ function Start-BerayanTui {
                 # Background auto-repair (or just a status refresh when no chain is active).
                 $evt = Get-Event -SourceIdentifier $netEvt -ErrorAction SilentlyContinue
                 if ($evt) { $evt | Remove-Event }
-                $script:LogQuiet = $true
+                $script:LogQuiet = $true; $script:ConsoleMute = $true
                 try {
                     $tick = $null
-                    if ($script:Dash.Session -and -not $script:TuiReadOnly) { $tick = Invoke-MonitorTick $config }
+                    if ($script:Dash.Guard -and -not $script:TuiReadOnly) { $tick = Invoke-MonitorTick $config }
+                    elseif (-not $script:TuiReadOnly -and $config.guard.autoStart -and -not $script:GuardUserOff -and $script:Dash.UpMode -eq 'tun') {
+                        # v2ray came (back) up while the guard was off: switch it on quietly (once - no retry loop).
+                        if (-not $script:GuardAutoFailed) { if (@(Invoke-GuardOn $config)[-1] -ne 0) { $script:GuardAutoFailed = $true } }
+                    }
                     $wantIp = ((Get-Date) - $lastIpCheck).TotalSeconds -ge 120
                     Update-Dashboard $config -Tick $(if ($tick -and -not $tick.Exit) { $tick } else { $null }) -PublicIp:$wantIp
                     if ($wantIp) { $lastIpCheck = Get-Date }
                 } catch { Write-Log TUI "background tick failed: $($_.Exception.Message)" -Level WARN }
-                finally { $script:LogQuiet = $false }
+                finally { $script:ConsoleMute = $false }
                 if ($fits -and $script:Vt) {
                     Write-Dashboard -InPlace
                     [Console]::Write("$script:E[$([Console]::WindowHeight);1H")
@@ -696,7 +951,15 @@ function Start-BerayanTui {
                 '3' { Invoke-TuiAction 'FULL TEST' { [void](Invoke-Test $config) }; Update-Dashboard $config -PublicIp; $lastIpCheck = Get-Date }
                 '4' { Invoke-TuiAction 'DIAGNOSE' { [void](Invoke-Diagnose $config) } }
                 '5' { Invoke-SettingsScreen $config; $config = Get-Config }
-                '6' { if (-not $script:TuiReadOnly) { Invoke-TuiAction 'RESET' { [void](Invoke-Stop $config @{ DisconnectNord = $false } -Reset) }; Update-Dashboard $config -PublicIp } }
+                'G' { if (-not $script:TuiReadOnly) { Invoke-GuardScreen $config } }
+                '6' {
+                    if (-not $script:TuiReadOnly) {
+                        $res = Invoke-TuiOperation 'RESET  (remove every Berayan change)' 'reset' { Invoke-Stop $config @{ DisconnectNord = $false } -Reset }
+                        $script:GuardUserOff = $true
+                        Update-Dashboard $config -PublicIp
+                        Write-ResultCard $res 'RESET DONE' @("Your IP:   $($script:Dash.PublicIp)", 'All Berayan changes removed. Press G to turn the leak guard on again.') 'RESET INCOMPLETE'
+                    }
+                }
                 '7' { Show-LogScreen }
                 'R' { Clear-Content; Write-Tui ''; Write-Tui '  Refreshing ...' 'DarkGray'; Update-Dashboard $config -PublicIp; $lastIpCheck = Get-Date }
                 'RESIZE' { if ($script:Vt) { [Console]::Write("$script:E[2J") }; Write-Header }
