@@ -1,0 +1,10 @@
+# Local runtime data - never publish
+logs/
+config.json
+*.log
+
+# Local notes
+prompt.md
+
+# Local tool state
+.claude/

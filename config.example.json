@@ -1,0 +1,28 @@
+{
+  "vpn": {
+    "provider": "ask",
+    "protocol": "ikev2",
+    "location": "best"
+  },
+  "upstream": {
+    "type": "auto",
+    "adapter": "auto",
+    "serverAddresses": [],
+    "bootstrapDns": ["auto"],
+    "processNames": [],
+    "clashApi": { "url": "", "secret": "" }
+  },
+  "nordvpn": {
+    "adapter": "auto",
+    "endpoint": "auto",
+    "installPath": "auto",
+    "connectTimeoutSec": 180
+  },
+  "ipv6Policy": "block-if-unsafe",
+  "dnsLeakProtection": true,
+  "killSwitch": true,
+  "allowLan": true,
+  "allowRemoteAddresses": [],
+  "dnsBootstrapAllow": [],
+  "monitor": { "safetyIntervalSec": 20 }
+}
