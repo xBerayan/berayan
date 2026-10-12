@@ -10,7 +10,7 @@
     Berayan then pins the routes, turns on its leak guard, connects the VPN through v2ray, proves the
     chain with real traffic and keeps it healthy (auto-repair) while the window stays open.
 
-    Scripting / automation: use vpn-chain.ps1 (same engine, plain commands).
+    Scripting / automation: use vpn-chain.cmd (same engine, plain commands).
 
 .PARAMETER ReadOnly
     Start without Administrator rights: status, test, diagnose and log only.
@@ -18,8 +18,8 @@
 param([switch]$ReadOnly, [switch]$NoElevate)
 
 $ErrorActionPreference = 'Stop'
-$script:RootDir = $PSScriptRoot
-foreach ($m in 'Common', 'Net', 'Providers', 'Detect', 'Verify', 'Engine', 'Tui') { . (Join-Path $PSScriptRoot "src\$m.ps1") }
+$script:RootDir = Split-Path $PSScriptRoot -Parent    # repo root: config.json and logs\ live there
+foreach ($m in 'Common', 'Net', 'Providers', 'Detect', 'Verify', 'Engine', 'Tui') { . (Join-Path $PSScriptRoot "modules\$m.ps1") }
 Initialize-Log
 
 if ($PSVersionTable.PSVersion.Major -lt 5) { Write-Host 'Berayan needs Windows PowerShell 5.1 or newer.' -ForegroundColor Red; exit 1 }

@@ -15,11 +15,11 @@
       monitor   re-attach the auto-repair monitor to an active session
 
 .EXAMPLE
-    .\vpn-chain.ps1 start                       (asks which VPN: NordVPN or Windscribe)
-    .\vpn-chain.ps1 start -Vpn windscribe -Connect -Location DE -Protocol stealth
-    .\vpn-chain.ps1 start -Vpn nordvpn -Connect -Location "Germany"
-    .\vpn-chain.ps1 status
-    .\vpn-chain.ps1 stop -DisconnectNord
+    .\vpn-chain.cmd start                       (asks which VPN: NordVPN or Windscribe)
+    .\vpn-chain.cmd start -Vpn windscribe -Connect -Location DE -Protocol stealth
+    .\vpn-chain.cmd start -Vpn nordvpn -Connect -Location "Germany"
+    .\vpn-chain.cmd status
+    .\vpn-chain.cmd stop -DisconnectNord
 #>
 param(
     [Parameter(Position = 0)]
@@ -46,13 +46,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:RootDir = $PSScriptRoot
-. (Join-Path $PSScriptRoot 'src\Common.ps1')
-. (Join-Path $PSScriptRoot 'src\Net.ps1')
-. (Join-Path $PSScriptRoot 'src\Providers.ps1')
-. (Join-Path $PSScriptRoot 'src\Detect.ps1')
-. (Join-Path $PSScriptRoot 'src\Verify.ps1')
-. (Join-Path $PSScriptRoot 'src\Engine.ps1')
+$script:RootDir = Split-Path $PSScriptRoot -Parent    # repo root: config.json and logs\ live there
+foreach ($m in 'Common', 'Net', 'Providers', 'Detect', 'Verify', 'Engine') { . (Join-Path $PSScriptRoot "modules\$m.ps1") }
 
 $script:Verbose = [bool]$VerboseLog
 

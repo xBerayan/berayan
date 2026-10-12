@@ -1,10 +1,11 @@
-# Local runtime data - never publish
-logs/
+# Your settings and logs (created when you run Berayan) - never publish
 config.json
+logs/
 *.log
 
-# Local notes
-prompt.md
+# Personal notes and scratch files
+.local/
 
-# Local tool state
+# Editor / tool state
 .claude/
+.vscode/

@@ -1,8 +1,8 @@
-# Test matrix
+# Testing
 
 There are two layers:
 
-1. **Automated, offline:** `tests\run-tests.ps1`. It covers pure logic (IP math, range complement, config, the state classifier) and the transactional engine against an in-memory fake route/firewall store: apply, idempotent re-apply, re-pinning, failure mid-apply, crash recovery, and an orphan sweep that preserves foreign routes and rules.
+1. **Automated, offline:** `tests\unit.ps1` and `tests\tui-smoke.ps1` (see [tests/](../tests)). `unit.ps1` covers pure logic (IP math, range complement, config, the state classifier) and the transactional engine against an in-memory fake route/firewall store: apply, idempotent re-apply, re-pinning, failure mid-apply, crash recovery, and an orphan sweep that preserves foreign routes and rules.
 2. **Live:** the scenarios below. They need real VPN sessions and an elevated shell. After each one, run `.\vpn-chain.cmd status` / `test`. After every *failure* scenario, run `.\vpn-chain.cmd stop` (or `reset`) and confirm that `diagnose` shows `our fw rules: 0` and no `vpn-chain` routes.
 
 | # | Scenario | Procedure | Expected |
@@ -27,7 +27,7 @@ There are two layers:
 
 | Suite | What it covers |
 |---|---|
-| `tests\run-tests.ps1` | 66 offline tests (real network-changing cmdlets are blocked inside the suite): IP math, config, provider and location catalogs, banner/dashboard shape, classifier matrix, transactional engine against a simulated route/firewall/NRPT/metric store (apply, idempotency, re-pin, failure mid-apply, crash recovery, foreign state preserved) |
+| `tests\unit.ps1` | 66 offline tests (real network-changing cmdlets are blocked inside the suite): IP math, config, provider and location catalogs, banner/dashboard shape, classifier matrix, transactional engine against a simulated route/firewall/NRPT/metric store (apply, idempotency, re-pin, failure mid-apply, crash recovery, foreign state preserved) |
 | `tests\tui-smoke.ps1` | starts the real terminal app **read-only** in a console window, reads the screen buffer and sends keys: locked red banner, dashboard, menu, diagnose scrolling under the banner, settings, connect wizard (VPN → protocol → scrollable location picker with search → pre-flight), typed custom location (regression: used to freeze), clean quit. It never changes the network. |
 
 ## Verified live (Windows 10 22H2, v2rayN + xray VLESS-Reality, Windscribe 2.24)

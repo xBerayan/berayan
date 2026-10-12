@@ -1,5 +1,5 @@
 # Common.ps1 - logging, configuration, elevation, session state, journal.
-# Dot-sourced by vpn-chain.ps1. Windows PowerShell 5.1 compatible.
+# Dot-sourced by src\berayan.ps1 and src\vpn-chain.ps1. Windows PowerShell 5.1 compatible.
 
 Set-StrictMode -Version 1.0   # v2 would reject the intrinsic .Count on unrolled single results
 
@@ -184,7 +184,7 @@ function Assert-Admin {
     if ($NoElevate) { return $false }
     $answer = Read-Host 'Relaunch this command elevated (UAC prompt)? [Y/n]'
     if ($answer -and $answer -notmatch '^(y|yes)$') { return $false }
-    $scriptPath = Join-Path $script:RootDir 'vpn-chain.ps1'
+    $scriptPath = Join-Path $script:RootDir 'src\vpn-chain.ps1'
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', ('"{0}"' -f $scriptPath)) + ($OriginalArgs | ForEach-Object {
         if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ }
     })

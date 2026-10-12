@@ -8,6 +8,11 @@
 
 # Berayan
 
+![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)
+![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE)
+![VPN: NordVPN | Windscribe](https://img.shields.io/badge/VPN-NordVPN%20%7C%20Windscribe-2EA44F)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
+
 **Berayan runs NordVPN or Windscribe *through* your v2rayN / sing-box tunnel on Windows.** It works as a terminal app with a menu, leak protection, real-traffic proof and auto-repair.
 
 ```
@@ -17,6 +22,8 @@
 - **Websites see the VPN's IP and DNS location**, not your v2ray exit.
 - **The VPN server sees your v2ray exit**, never your real IP.
 - If anything breaks, **traffic is blocked instead of leaking**, and disconnecting restores your network exactly as it was.
+
+**Contents:** [Requirements](#requirements) · [Quick start](#quick-start) · [The terminal app](#the-terminal-app) · [Leak guard](#leak-guard-your-real-ip-never-leaks) · [Recommended settings](#recommended-settings-important) · [How it works](#how-it-works) · [Command line](#command-line-automation) · [Troubleshooting](#troubleshooting) · [Project layout](#project-layout)
 
 ---
 
@@ -157,12 +164,38 @@ Settings live in `config.json` (copy `config.example.json`). The app writes your
 | `ROUTING_LOOP` | in sing-box set `route.default_interface` to your NIC, or turn off `auto_detect_interface` |
 | No internet after a crash | open Berayan → **6 Reset** |
 
+## Project layout
+
+```
+berayan/
+├── berayan.cmd             ◄ start here (double-click)
+├── vpn-chain.cmd           command-line version, for scripts
+├── config.example.json     example settings
+│
+├── src/                    source code
+│   ├── berayan.ps1         the terminal app
+│   ├── vpn-chain.ps1       the command-line app
+│   └── modules/            the shared engine: UI, routing, firewall, VPN providers, checks
+│
+├── docs/
+│   ├── architecture.md     how the chain and the leak guard work
+│   └── testing.md          live test scenarios and results
+│
+└── tests/
+    ├── unit.ps1            66 offline tests
+    └── tui-smoke.ps1       drives the real app, read-only
+```
+
+Berayan creates `config.json` (your choices) and `logs\` next to `berayan.cmd` when it runs. Both stay on your PC: they are git-ignored and never uploaded.
+
 ## Tests
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1    # 66 offline unit tests
+powershell -ExecutionPolicy Bypass -File tests\unit.ps1         # 66 offline unit tests
 powershell -ExecutionPolicy Bypass -File tests\tui-smoke.ps1    # drives the real terminal app (read-only)
 ```
+
+More in [tests/](tests) and [docs/testing.md](docs/testing.md).
 
 ## Uninstall
 

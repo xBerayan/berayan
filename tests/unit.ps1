@@ -1,17 +1,11 @@
 # Self-contained test runner (no Pester dependency; Windows ships only Pester 3.4).
 # Runs pure-logic tests and transactional engine tests against an in-memory fake
 # route/firewall store - it never touches the real network configuration.
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\unit.ps1
 
 $ErrorActionPreference = 'Stop'
 $script:RootDir = Split-Path $PSScriptRoot -Parent
-. (Join-Path $script:RootDir 'src\Common.ps1')
-. (Join-Path $script:RootDir 'src\Net.ps1')
-. (Join-Path $script:RootDir 'src\Providers.ps1')
-. (Join-Path $script:RootDir 'src\Detect.ps1')
-. (Join-Path $script:RootDir 'src\Verify.ps1')
-. (Join-Path $script:RootDir 'src\Engine.ps1')
-. (Join-Path $script:RootDir 'src\Tui.ps1')
+foreach ($m in 'Common', 'Net', 'Providers', 'Detect', 'Verify', 'Engine', 'Tui') { . (Join-Path $script:RootDir "src\modules\$m.ps1") }
 
 # Isolate state + logs.
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('vpn-chain-test-' + [guid]::NewGuid().ToString('N'))

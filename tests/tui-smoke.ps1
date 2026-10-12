@@ -1,5 +1,5 @@
 # End-to-end smoke test of the interactive terminal app in a REAL console window.
-# Launches berayan.ps1 -ReadOnly (no admin, no network changes), attaches to its console,
+# Launches src\berayan.ps1 -ReadOnly (no admin, no network changes), attaches to its console,
 # reads the screen buffer (text + colours) and sends key presses.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tests\tui-smoke.ps1
 param([int]$StartupWaitSec = 20)
@@ -73,7 +73,7 @@ function Key([string]$k) {
 }
 function Find([string[]]$Lines, [string]$Pattern) { for ($i = 0; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match $Pattern) { return $i } }; return -1 }
 
-$script:proc = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f (Join-Path $root 'berayan.ps1')), '-ReadOnly') -PassThru
+$script:proc = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f (Join-Path $root 'src\berayan.ps1')), '-ReadOnly') -PassThru
 try {
     $deadline = (Get-Date).AddSeconds($StartupWaitSec + 40)
     do { Start-Sleep -Seconds 2; $s = Snap } until ((Find $s 'Select an option') -ge 0 -or (Get-Date) -gt $deadline)

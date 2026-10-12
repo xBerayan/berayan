@@ -69,12 +69,12 @@ It's written in Windows PowerShell 5.1 using only built-in cmdlets (`New-NetRout
 
 | File | Role |
 |---|---|
-| `berayan.ps1` / `berayan.cmd` | interactive app launcher (elevation, read-only fallback) |
-| `src/Tui.ps1` | terminal UI: locked banner (VT scroll region), dashboard, wizard, background auto-repair |
-| `src/Engine.ps1` | desired state, transactional reconcile, start/stop/reset/monitor, verification report |
-| `src/Providers.ps1` | NordVPN / Windscribe specifics (CLI, protocols, conflicts, announced endpoints) |
-| `src/Detect.ps1` | upstream + VPN detection |
-| `src/Verify.ps1` | classifier + behavioral probes |
-| `src/Net.ps1` | IP math, routes, firewall, NRPT, metrics, probes |
-| `src/Common.ps1` | config, logging, journal, elevation |
-| `vpn-chain.ps1` / `.cmd` | non-interactive CLI over the same engine |
+| `berayan.cmd` → `src/berayan.ps1` | interactive app launcher (elevation, read-only fallback) |
+| `vpn-chain.cmd` → `src/vpn-chain.ps1` | non-interactive CLI over the same engine |
+| `src/modules/Tui.ps1` | terminal UI: locked banner (VT scroll region), dashboard, wizard, background auto-repair |
+| `src/modules/Engine.ps1` | desired state, transactional reconcile, start/stop/reset/monitor, verification report |
+| `src/modules/Providers.ps1` | NordVPN / Windscribe specifics (CLI, protocols, conflicts, announced endpoints) |
+| `src/modules/Detect.ps1` | upstream + VPN detection |
+| `src/modules/Verify.ps1` | classifier + behavioral probes |
+| `src/modules/Net.ps1` | IP math, routes, firewall, NRPT, metrics, probes |
+| `src/modules/Common.ps1` | config, logging, journal, elevation |
