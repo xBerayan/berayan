@@ -1,4 +1,4 @@
-# Your settings and logs (created when you run Berayan) - never publish
+# Your settings and logs (created when you run TunnelStack) - never publish
 config.json
 logs/
 *.log

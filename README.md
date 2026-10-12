@@ -1,19 +1,19 @@
 ```
- ____    _____   ____       _     __   __     _      _   _
-| __ )  | ____| |  _ \     / \    \ \ / /    / \    | \ | |
-|  _ \  |  _|   | |_) |   / _ \    \ V /    / _ \   |  \| |
-| |_) | | |___  |  _ <   / ___ \    | |    / ___ \  | |\  |
-|____/  |_____| |_| \_\ /_/   \_\   |_|   /_/   \_\ |_| \_|
+ _____   _   _   _   _   _   _   _____   _       ____    _____      _       ____   _  __
+|_   _| | | | | | \ | | | \ | | | ____| | |     / ___|  |_   _|    / \     / ___| | |/ /
+  | |   | | | | |  \| | |  \| | |  _|   | |     \___ \    | |     / _ \   | |     | ' /
+  | |   | |_| | | |\  | | |\  | | |___  | |___   ___) |   | |    / ___ \  | |___  | . \
+  |_|    \___/  |_| \_| |_| \_| |_____| |_____| |____/    |_|   /_/   \_\  \____| |_|\_\
 ```
 
-# Berayan
+# TunnelStack
 
 ![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)
 ![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE)
 ![VPN: NordVPN | Windscribe](https://img.shields.io/badge/VPN-NordVPN%20%7C%20Windscribe-2EA44F)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
-**Berayan runs NordVPN or Windscribe *through* your v2rayN / sing-box tunnel on Windows.** It works as a terminal app with a menu, leak protection, real-traffic proof and auto-repair.
+**TunnelStack runs NordVPN or Windscribe *through* your v2rayN / sing-box tunnel on Windows.** It works as a terminal app with a menu, leak protection, real-traffic proof and auto-repair.
 
 ```
  Your apps ──► VPN (NordVPN / Windscribe) ──► v2ray TUN (v2rayN / sing-box) ──► v2ray server ──► VPN server ──► Internet
@@ -34,27 +34,27 @@
 | OS | **Windows 10 or 11** (x64). Uses the built-in Windows PowerShell 5.1, so there's nothing to install. |
 | Upstream | **v2rayN** or **sing-box** (also Hiddify / NekoBox / Clash Verge) with **TUN mode ON** |
 | VPN | the official **Windscribe** app (logged in) or **NordVPN** app |
-| Rights | Administrator. Berayan asks for it through UAC, and you can start in read-only mode without it. |
+| Rights | Administrator. TunnelStack asks for it through UAC, and you can start in read-only mode without it. |
 
-> Berayan drives the Windows network stack (routes, Windows Firewall, NRPT), so it is **Windows-only**. macOS and Linux are not supported.
+> TunnelStack drives the Windows network stack (routes, Windows Firewall, NRPT), so it is **Windows-only**. macOS and Linux are not supported.
 
 ## Quick start
 
 ```powershell
-git clone https://github.com/xBerayan/berayan.git
-cd berayan
-.\berayan.cmd
+git clone https://github.com/xBerayan/tunnelstack.git
+cd tunnelstack
+.\tunnelstack.cmd
 ```
 
-No git? Download the ZIP from GitHub, extract it, and double-click **`berayan.cmd`**.
+No git? Download the ZIP from GitHub, extract it, and double-click **`tunnelstack.cmd`**.
 
 1. Start **v2rayN** with **TUN mode ON**, and set **System proxy → Clear system proxy**.
-2. Run `berayan.cmd` and accept the UAC prompt.
+2. Run `tunnelstack.cmd` and accept the UAC prompt.
 3. Press **1 → Connect**, then:
    - **Step 1:** choose the VPN, **NordVPN** or **Windscribe**.
    - **Step 2:** choose the protocol (**IKEv2**, **Stealth**, **TCP**, ...).
    - **Step 3:** pick the location from a scrollable list (arrow keys, PgUp/PgDn, type to search, Enter = select). Recent locations are listed first.
-4. Berayan runs pre-flight checks, connects, proves the chain with real traffic, and keeps it healthy while the window stays open.
+4. TunnelStack runs pre-flight checks, connects, proves the chain with real traffic, and keeps it healthy while the window stays open.
 
 ## The terminal app
 
@@ -83,11 +83,11 @@ No git? Download the ZIP from GitHub, extract it, and double-click **`berayan.cm
 - **Auto-repair** runs in the background while the menu is open. It re-pins routes after VPN or v2ray reconnects, server switches, Wi-Fi ↔ Ethernet changes and sleep/resume.
 - **Esc** cancels a connect in progress. Everything is rolled back, and the leak guard stays on.
 - **Locations** are picked from a scrollable, searchable list. For Windscribe this includes your **static IPs** (e.g. "Washington DC (static IP)") and recently used cities.
-- **`berayan.cmd -ReadOnly`** runs without admin and changes nothing: status, test, diagnose and log only.
+- **`tunnelstack.cmd -ReadOnly`** runs without admin and changes nothing: status, test, diagnose and log only.
 
 ## Leak guard (your real IP never leaks)
 
-The leak guard turns **on when Berayan opens** and **off when you quit** (you can choose to keep it on). Toggle it any time with **G**.
+The leak guard turns **on when TunnelStack opens** and **off when you quit** (you can choose to keep it on). Toggle it any time with **G**.
 
 | Situation | What happens |
 |---|---|
@@ -95,20 +95,20 @@ The leak guard turns **on when Berayan opens** and **off when you quit** (you ca
 | VPN connected through v2ray | the same, plus DNS only via the VPN and the VPN server pinned into v2ray |
 | v2ray drops or restarts | traffic is **blocked**, not sent over your real connection. It resumes when v2ray is back |
 | VPN drops or reconnects | traffic falls back to v2ray, never to your real IP |
-| you switch servers in v2rayN | Berayan reads v2rayN's active profile and allows the new server automatically |
-| Berayan or Windows crashes | the firewall rules stay (fail-closed). Open Berayan → **6 Reset**, or just turn the guard off with **G** |
+| you switch servers in v2rayN | TunnelStack reads v2rayN's active profile and allows the new server automatically |
+| TunnelStack or Windows crashes | the firewall rules stay (fail-closed). Open TunnelStack → **6 Reset**, or just turn the guard off with **G** |
 
 It is built from Windows Firewall rules in the group `vpn-chain` plus a few routes, all journaled and removed exactly when you turn it off.
 
 ## Recommended settings (important)
 
-A VPN app's own protections can cut v2ray off, and then the VPN loses the very path it runs through. Berayan detects these problems and tells you the fix:
+A VPN app's own protections can cut v2ray off, and then the VPN loses the very path it runs through. TunnelStack detects these problems and tells you the fix:
 
 | VPN | Setting | Why |
 |---|---|---|
 | Windscribe | Preferences → Connection → **Terminate Sockets: OFF** | Otherwise every connect closes all TCP connections, including v2ray's, and Windscribe reconnects in a loop |
 | Windscribe | Protocol **IKEv2** (verified), **Stealth** or **TCP** | Windscribe's **WireGuard** client blocks all non-tunnel traffic, which also blocks v2ray |
-| Windscribe | Firewall **off** / Manual | Berayan's own kill switch replaces it |
+| Windscribe | Firewall **off** / Manual | TunnelStack's own kill switch replaces it |
 | NordVPN | Settings → **Split tunneling** → bypass `xray.exe` and `sing-box.exe` | NordVPN's always-on *LeakBlock* otherwise blocks v2ray |
 | NordVPN | Protocol: **OpenVPN TCP** (set in the NordVPN app) | NordVPN's command line cannot switch protocols |
 | v2rayN | **TUN ON**, **System proxy: Clear**, **Strict Route OFF** | A system proxy lets browsers skip the VPN, and Strict Route blocks the VPN's DNS |
@@ -127,7 +127,7 @@ Verified end to end on Windows 10 22H2 with v2rayN (xray VLESS-Reality) and Wind
 | Windows Firewall rules (group `vpn-chain`) | kill switch, DNS leak guard, IPv6 guard |
 | Ports v2rayN rejects (e.g. UDP 443) avoided | the VPN transport isn't silently dropped |
 
-Every change is written to a journal *before* it's made and removed on Disconnect. **Reset** cleans up after a crash, and routes disappear on reboot by themselves. Berayan never touches routes or rules it didn't create.
+Every change is written to a journal *before* it's made and removed on Disconnect. **Reset** cleans up after a crash, and routes disappear on reboot by themselves. TunnelStack never touches routes or rules it didn't create.
 
 Details: [docs/architecture.md](docs/architecture.md).
 
@@ -162,18 +162,18 @@ Settings live in `config.json` (copy `config.example.json`). The app writes your
 | VPN connects then drops in a loop | Windscribe Terminate Sockets ON, NordVPN LeakBlock without split tunneling, or WireGuard |
 | `UPSTREAM_BLOCKED_BY_GUARD` | Settings → Extra v2ray servers: add the server IPs your v2ray profile uses |
 | `ROUTING_LOOP` | in sing-box set `route.default_interface` to your NIC, or turn off `auto_detect_interface` |
-| No internet after a crash | open Berayan → **6 Reset** |
+| No internet after a crash | open TunnelStack → **6 Reset** |
 
 ## Project layout
 
 ```
-berayan/
-├── berayan.cmd             ◄ start here (double-click)
+tunnelstack/
+├── tunnelstack.cmd         ◄ start here (double-click)
 ├── vpn-chain.cmd           command-line version, for scripts
 ├── config.example.json     example settings
 │
 ├── src/                    source code
-│   ├── berayan.ps1         the terminal app
+│   ├── tunnelstack.ps1     the terminal app
 │   ├── vpn-chain.ps1       the command-line app
 │   └── modules/            the shared engine: UI, routing, firewall, VPN providers, checks
 │
@@ -186,7 +186,7 @@ berayan/
     └── tui-smoke.ps1       drives the real app, read-only
 ```
 
-Berayan creates `config.json` (your choices) and `logs\` next to `berayan.cmd` when it runs. Both stay on your PC: they are git-ignored and never uploaded.
+TunnelStack creates `config.json` (your choices) and `logs\` next to `tunnelstack.cmd` when it runs. Both stay on your PC: they are git-ignored and never uploaded.
 
 ## Tests
 
@@ -203,7 +203,7 @@ Disconnect (or **Reset**), then delete the folder and `%ProgramData%\vpn-chain`.
 
 ## Disclaimer
 
-Berayan only configures your own computer. Using VPNs and proxies may be restricted where you live, and providers have their own terms. You are responsible for how you use it.
+TunnelStack only configures your own computer. Using VPNs and proxies may be restricted where you live, and providers have their own terms. You are responsible for how you use it.
 
 ## License
 

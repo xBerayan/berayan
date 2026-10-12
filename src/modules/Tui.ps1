@@ -1,4 +1,4 @@
-# Tui.ps1 - Berayan interactive terminal app.
+# Tui.ps1 - TunnelStack interactive terminal app.
 #
 #  * A bold red BERAYAN banner is drawn at the top and locked there with a VT scroll region
 #    (DECSTBM): everything else - menus, operation output - scrolls underneath it.
@@ -29,18 +29,18 @@ $script:Dash = @{
 
 function Enable-VtMode {
     try {
-        if (-not ('BerayanNative.Con' -as [type])) {
-            Add-Type -Namespace BerayanNative -Name Con -MemberDefinition @'
+        if (-not ('TunnelStackNative.Con' -as [type])) {
+            Add-Type -Namespace TunnelStackNative -Name Con -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)] public static extern System.IntPtr GetStdHandle(int nStdHandle);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(System.IntPtr hConsoleHandle, out uint lpMode);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(System.IntPtr hConsoleHandle, uint dwMode);
 '@
         }
-        $h = [BerayanNative.Con]::GetStdHandle(-11)
+        $h = [TunnelStackNative.Con]::GetStdHandle(-11)
         $mode = [uint32]0
-        if (-not [BerayanNative.Con]::GetConsoleMode($h, [ref]$mode)) { return $false }
+        if (-not [TunnelStackNative.Con]::GetConsoleMode($h, [ref]$mode)) { return $false }
         if (($mode -band 4) -ne 0) { return $true }
-        return [BerayanNative.Con]::SetConsoleMode($h, ($mode -bor 4))   # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        return [TunnelStackNative.Con]::SetConsoleMode($h, ($mode -bor 4))   # ENABLE_VIRTUAL_TERMINAL_PROCESSING
     } catch { return $false }
 }
 
@@ -431,7 +431,7 @@ function New-OpPhases {
         'connect'    { @(@('v2ray', 'Check v2ray tunnel'), @('guard', 'Leak guard'), @('vpn', "Connect $($script:ChainVpn.Display)"), @('routes', 'Route VPN through v2ray'), @('verify', 'Verify (IP, DNS, IPv6, traffic)')) }
         'guard-on'   { @(@('v2ray', 'Check v2ray tunnel'), @('guard', 'Turn on leak guard'), @('verify', 'Check internet through v2ray')) }
         'disconnect' { @(@('vpn', "Disconnect $($script:ChainVpn.Display)"), @('restore', 'Remove VPN routes'), @('verify', 'Check internet')) }
-        default      { @(@('restore', 'Remove Berayan changes'), @('verify', 'Check internet')) }
+        default      { @(@('restore', 'Remove TunnelStack changes'), @('verify', 'Check internet')) }
     }
     @($defs | ForEach-Object { [pscustomobject]@{ Key = $_[0]; Label = $_[1]; State = 'wait'; Detail = '' } })
 }
@@ -701,9 +701,9 @@ function Invoke-ConnectWizard {
     Write-Tui ''
     Write-Tui '  Pre-flight checks' 'BoldCyan'
     $blocking = $false
-    if ($script:TuiReadOnly) { $blocking = $true; Write-Check 'fail' 'Read-only mode: Berayan will not change anything. Start it normally (no -ReadOnly) to connect.' }
+    if ($script:TuiReadOnly) { $blocking = $true; Write-Check 'fail' 'Read-only mode: TunnelStack will not change anything. Start it normally (no -ReadOnly) to connect.' }
     elseif (Test-IsAdmin) { Write-Check 'ok' 'Running as Administrator' }
-    else { $blocking = $true; Write-Check 'fail' 'Not running as Administrator - close Berayan and start it again, then accept the UAC prompt.' }
+    else { $blocking = $true; Write-Check 'fail' 'Not running as Administrator - close TunnelStack and start it again, then accept the UAC prompt.' }
     $script:LogQuiet = $true      # detection warnings go to the log; the checks below explain them
     try { $env = Get-ChainEnvironment $Config $null } finally { $script:LogQuiet = $false }
     $u = $env.Upstream
@@ -743,7 +743,7 @@ function Invoke-ConnectWizard {
     Write-ResultCard $res 'CONNECTED' @(
         "Your IP:   $($script:Dash.PublicIp)   ($($script:ChainVpn.Display) $(if ($script:Dash.VpnWhere) { '- ' + $script:Dash.VpnWhere }))",
         "Path:      apps  ->  $($script:ChainVpn.Display)  ->  v2ray ($exit)  ->  internet",
-        'DNS only via the VPN, IPv6 blocked, auto-repair on while Berayan is open.'
+        'DNS only via the VPN, IPv6 blocked, auto-repair on while TunnelStack is open.'
     ) 'NOT CONNECTED'
 }
 
@@ -820,7 +820,7 @@ function Invoke-SettingsScreen {
         Write-MenuItem '4' ("Allow LAN              " + (& $onoff $Config.allowLan)) 'printers, NAS, router page'
         Write-MenuItem '5' ("Extra v2ray servers    " + $(if (@($Config.upstream.serverAddresses).Count) { @($Config.upstream.serverAddresses) -join ', ' } else { '(auto-detect)' })) 'IPs/CIDRs the kill switch must allow'
         Write-MenuItem '6' ("VPN connect timeout    " + $Config.nordvpn.connectTimeoutSec + ' s') ''
-        Write-MenuItem '7' ("Leak guard on start    " + (& $onoff $Config.guard.autoStart)) 'turn the leak guard on automatically when Berayan opens'
+        Write-MenuItem '7' ("Leak guard on start    " + (& $onoff $Config.guard.autoStart)) 'turn the leak guard on automatically when TunnelStack opens'
         Write-Segments @(@('   [', 'DarkGray'), @('B', 'BoldRed'), @('] Back', 'DarkGray'))
         Write-Tui ''
         Write-Tui '  Select: ' 'BoldWhite' -NoNewline
@@ -862,7 +862,7 @@ function Invoke-QuitScreen {
     Write-Tui "  $(if ($script:Dash.Session) { "$($script:ChainVpn.Display) through v2ray and the leak guard are on." } else { 'The leak guard is on.' })" 'White'
     Write-Tui ''
     Write-MenuItem 'S' 'Turn everything off and quit' 'default - VPN off, leak guard off, normal network restored'
-    Write-MenuItem 'K' 'Keep protection on and quit' 'stays fail-closed; auto-repair stops until Berayan is opened again'
+    Write-MenuItem 'K' 'Keep protection on and quit' 'stays fail-closed; auto-repair stops until TunnelStack is opened again'
     Write-MenuItem 'C' 'Cancel' ''
     Write-Tui ''
     Write-Tui '  Select: ' 'BoldWhite' -NoNewline
@@ -883,12 +883,12 @@ function Invoke-QuitScreen {
 # Main loop
 # ----------------------------------------------------------------------------
 
-function Start-BerayanTui {
+function Start-TunnelStackTui {
     param([switch]$ReadOnly)
     $script:TuiReadOnly = [bool]$ReadOnly
     $script:Vt = Enable-VtMode
     try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
-    try { $Host.UI.RawUI.WindowTitle = "Berayan $script:AppVersion$(if ($ReadOnly) { ' (read-only)' })" } catch { }
+    try { $Host.UI.RawUI.WindowTitle = "TunnelStack $script:AppVersion$(if ($ReadOnly) { ' (read-only)' })" } catch { }
     try { [Console]::TreatControlCAsInput = $true } catch { }
     if ($script:Vt) { [Console]::Write("$script:E[2J$script:E[3J") }
     Write-Header
@@ -904,14 +904,14 @@ function Start-BerayanTui {
     Write-Tui '  Scanning network ...' 'DarkGray'
     Update-Dashboard $config -PublicIp
 
-    # Leak guard on start: protection is on whenever Berayan is on.
+    # Leak guard on start: protection is on whenever TunnelStack is on.
     if (-not $script:TuiReadOnly -and $config.guard.autoStart -and -not $script:Dash.Guard -and $script:Dash.UpMode -eq 'tun') {
         $res = Invoke-TuiOperation 'TURNING THE LEAK GUARD ON' 'guard-on' { Invoke-GuardOn $config }
         Update-Dashboard $config -PublicIp
         if (-not $res.Ok) { Write-ResultCard $res '' @() 'LEAK GUARD NOT ENABLED' }
     }
 
-    $netEvt = 'berayan.net'
+    $netEvt = 'tunnelstack.net'
     Register-ObjectEvent -InputObject ([System.Net.NetworkInformation.NetworkChange]) -EventName NetworkAddressChanged -SourceIdentifier $netEvt | Out-Null
     $interval = [Math]::Max(5, [int]$config.monitor.safetyIntervalSec)
     $lastIpCheck = Get-Date
@@ -954,10 +954,10 @@ function Start-BerayanTui {
                 'G' { if (-not $script:TuiReadOnly) { Invoke-GuardScreen $config } }
                 '6' {
                     if (-not $script:TuiReadOnly) {
-                        $res = Invoke-TuiOperation 'RESET  (remove every Berayan change)' 'reset' { Invoke-Stop $config @{ DisconnectNord = $false } -Reset }
+                        $res = Invoke-TuiOperation 'RESET  (remove every TunnelStack change)' 'reset' { Invoke-Stop $config @{ DisconnectNord = $false } -Reset }
                         $script:GuardUserOff = $true
                         Update-Dashboard $config -PublicIp
-                        Write-ResultCard $res 'RESET DONE' @("Your IP:   $($script:Dash.PublicIp)", 'All Berayan changes removed. Press G to turn the leak guard on again.') 'RESET INCOMPLETE'
+                        Write-ResultCard $res 'RESET DONE' @("Your IP:   $($script:Dash.PublicIp)", 'All TunnelStack changes removed. Press G to turn the leak guard on again.') 'RESET INCOMPLETE'
                     }
                 }
                 '7' { Show-LogScreen }
@@ -971,6 +971,6 @@ function Start-BerayanTui {
         try { [Console]::TreatControlCAsInput = $false } catch { }
         if ($script:Vt) { [Console]::Write("$script:E[r$script:E[?25h$script:E[0m$script:E[$([Console]::WindowHeight);1H") }
         Write-Tui ''
-        Write-Tui '  Bye. Run berayan.cmd again any time.' 'DarkGray'
+        Write-Tui '  Bye. Run tunnelstack.cmd again any time.' 'DarkGray'
     }
 }

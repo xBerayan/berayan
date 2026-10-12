@@ -1,10 +1,10 @@
 # src
 
-The source code of Berayan. You don't need to open anything here. Run **`berayan.cmd`** from the main folder.
+The source code of TunnelStack. You don't need to open anything here. Run **`tunnelstack.cmd`** from the main folder.
 
 | File | What it is |
 |---|---|
-| [`berayan.ps1`](berayan.ps1) | the interactive terminal app (started by `berayan.cmd`) |
+| [`tunnelstack.ps1`](tunnelstack.ps1) | the interactive terminal app (started by `tunnelstack.cmd`) |
 | [`vpn-chain.ps1`](vpn-chain.ps1) | the command-line version (started by `vpn-chain.cmd`) |
 
 ## modules

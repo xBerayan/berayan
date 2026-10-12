@@ -1,4 +1,4 @@
-# Berayan – architecture
+# TunnelStack – architecture
 
 ## Goal
 
@@ -6,7 +6,7 @@
 App packet
  → VPN adapter (NordLynx / WireGuard / OpenVPN / IKEv2)       [0/1 + 128/1 routes, VPN wins over the v2ray TUN]
  → VPN encapsulation
- → /32 route for the VPN server → v2ray TUN (Wintun)           [Berayan pin]
+ → /32 route for the VPN server → v2ray TUN (Wintun)           [TunnelStack pin]
  → v2rayN / sing-box → xray (VLESS / VMess / Trojan / ...)
  → physical NIC                                               [/32 pin for the v2ray server + kill switch exemption]
  → v2ray server → VPN server → destination
@@ -28,14 +28,14 @@ It's written in Windows PowerShell 5.1 using only built-in cmdlets (`New-NetRout
 3. **v2rayN's TUN has interface metric 0.** It beats the VPN's own `0.0.0.0/0` (metric 1–5), so without help the VPN "connects" but no app traffic (not even its DNS) uses it, and the VPN app gives up. **Fix:** `0.0.0.0/1 + 128.0.0.0/1` on the VPN adapter.
 4. **sing-box (`auto_detect_interface`) follows the best `0.0.0.0/0`.** A VPN installing a low-metric `/0` can make sing-box re-bind and reset its connections. **Fix:** raise the VPN adapter's interface metric (journaled, restored).
 5. **v2rayN resolves its server hostname through Windows every ~TTL.** Once the VPN owns system DNS, that would need the VPN, which needs v2ray: a deadlock. **Fix:** an NRPT rule for that hostname only, pointing at v2ray's own direct DNS. That DNS server is pinned to the WAN and exempt from the guard.
-6. **v2rayN's sing-box config rejects UDP 443 (QUIC) and hijacks UDP 53.** VPN transport on those ports is silently dropped. **Fix:** Berayan reads the rejected ports and picks another VPN port (e.g. Windscribe `udp:1194`).
-7. **The VPN apps' own protections cut v2ray off.** These can't be fixed from outside (no API), so Berayan detects them and tells the user the fix:
+6. **v2rayN's sing-box config rejects UDP 443 (QUIC) and hijacks UDP 53.** VPN transport on those ports is silently dropped. **Fix:** TunnelStack reads the rejected ports and picks another VPN port (e.g. Windscribe `udp:1194`).
+7. **The VPN apps' own protections cut v2ray off.** These can't be fixed from outside (no API), so TunnelStack detects them and tells the user the fix:
    - **Windscribe "Terminate Sockets"** closes every TCP connection on connect (`closeAllTcpConnections` in its service log), including xray's link that Windscribe runs through, so it reconnects in a loop.
    - **Windscribe WireGuard** enables wireguard-windows' "block untunneled traffic" WFP filters.
    - **NordVPN LeakBlock** (NDivert, always on while connected) whitelists only the NordVPN adapter. Split tunneling for the v2ray core executables is required.
-8. **A system proxy** pointing at the local core lets browsers go app → core → v2ray server, skipping the VPN. Berayan refuses to start until it's cleared.
+8. **A system proxy** pointing at the local core lets browsers go app → core → v2ray server, skipping the VPN. TunnelStack refuses to start until it's cleared.
 
-## What Berayan changes (all journaled)
+## What TunnelStack changes (all journaled)
 
 | Item | Store | Purpose |
 |---|---|---|
@@ -49,7 +49,7 @@ It's written in Windows PowerShell 5.1 using only built-in cmdlets (`New-NetRout
 | DNS 53/853 blocked on WAN, and on the v2ray TUN once the VPN is up | `vpn-chain` | DNS only via the VPN |
 | Global IPv6 blocked outside the VPN | `vpn-chain` | no IPv6 bypass |
 
-**Transactions.** Every item is journaled as `pending` before it's applied and as `applied` after it's verified. Reconcile adds before it removes, so protection never has a gap. Disconnect removes the journal in reverse order and sweeps the `vpn-chain` firewall group and the tagged NRPT rules. Reset does the same after a crash, even without a session file. Routes and rules that Berayan didn't create are never touched.
+**Transactions.** Every item is journaled as `pending` before it's applied and as `applied` after it's verified. Reconcile adds before it removes, so protection never has a gap. Disconnect removes the journal in reverse order and sweeps the `vpn-chain` firewall group and the tagged NRPT rules. Reset does the same after a crash, even without a session file. Routes and rules that TunnelStack didn't create are never touched.
 
 ## Detection
 
@@ -69,7 +69,7 @@ It's written in Windows PowerShell 5.1 using only built-in cmdlets (`New-NetRout
 
 | File | Role |
 |---|---|
-| `berayan.cmd` → `src/berayan.ps1` | interactive app launcher (elevation, read-only fallback) |
+| `tunnelstack.cmd` → `src/tunnelstack.ps1` | interactive app launcher (elevation, read-only fallback) |
 | `vpn-chain.cmd` → `src/vpn-chain.ps1` | non-interactive CLI over the same engine |
 | `src/modules/Tui.ps1` | terminal UI: locked banner (VT scroll region), dashboard, wizard, background auto-repair |
 | `src/modules/Engine.ps1` | desired state, transactional reconcile, start/stop/reset/monitor, verification report |

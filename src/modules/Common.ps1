@@ -1,5 +1,5 @@
 # Common.ps1 - logging, configuration, elevation, session state, journal.
-# Dot-sourced by src\berayan.ps1 and src\vpn-chain.ps1. Windows PowerShell 5.1 compatible.
+# Dot-sourced by src\tunnelstack.ps1 and src\vpn-chain.ps1. Windows PowerShell 5.1 compatible.
 
 Set-StrictMode -Version 1.0   # v2 would reject the intrinsic .Count on unrolled single results
 
@@ -102,7 +102,7 @@ function Get-DefaultConfig {
             provider = 'ask'              # ask | nordvpn | windscribe  (VPN chained on top of v2ray)
         }
         guard = [ordered]@{
-            autoStart = $true             # leak guard turns on when Berayan opens (and when v2ray comes back up)
+            autoStart = $true             # leak guard turns on when TunnelStack opens (and when v2ray comes back up)
         }
         nordvpn = [ordered]@{             # settings for the chained VPN (any provider)
             adapter           = 'auto'    # interface alias, or auto
